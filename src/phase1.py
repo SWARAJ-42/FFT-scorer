@@ -428,10 +428,100 @@ def main():
 
     cases, skipped = load_uu_cases(args.json, args.pdb_root)
 
+    # Visualize the first complex for quick inspection
+    if cases:
+        print("Opening visualization for first case...")
+        visualize_structure(cases[0].complex_struct, title=f"Complex {cases[0].complex_id}")
+
     print_summary(cases, skipped)
 
     return cases
 
+
+# ──────────────────────────────────────────────
+# Visualization
+# ──────────────────────────────────────────────
+
+def visualize_structure(struct: Structure, title: str = ""):
+    """
+    Interactive 3D visualization of a Structure using Plotly.
+    Protein chains are colored blue, RNA chains red.
+    """
+
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        print("Plotly not installed. Run: pip install plotly")
+        return
+
+    protein_x, protein_y, protein_z = [], [], []
+    rna_x, rna_y, rna_z = [], [], []
+    unknown_x, unknown_y, unknown_z = [], [], []
+
+    for chain in struct.chains:
+
+        for atom in chain.atoms:
+
+            if chain.mol_type == "protein":
+                protein_x.append(atom.x)
+                protein_y.append(atom.y)
+                protein_z.append(atom.z)
+
+            elif chain.mol_type == "rna":
+                rna_x.append(atom.x)
+                rna_y.append(atom.y)
+                rna_z.append(atom.z)
+
+            else:
+                unknown_x.append(atom.x)
+                unknown_y.append(atom.y)
+                unknown_z.append(atom.z)
+
+    fig = go.Figure()
+
+    # Protein atoms
+    fig.add_trace(go.Scatter3d(
+        x=protein_x,
+        y=protein_y,
+        z=protein_z,
+        mode="markers",
+        marker=dict(size=3),
+        name="Protein"
+    ))
+
+    # RNA atoms
+    fig.add_trace(go.Scatter3d(
+        x=rna_x,
+        y=rna_y,
+        z=rna_z,
+        mode="markers",
+        marker=dict(size=3),
+        name="RNA"
+    ))
+
+    # Unknown atoms
+    if unknown_x:
+        fig.add_trace(go.Scatter3d(
+            x=unknown_x,
+            y=unknown_y,
+            z=unknown_z,
+            mode="markers",
+            marker=dict(size=3),
+            name="Unknown"
+        ))
+
+    fig.update_layout(
+        title=title or struct.pdb_id,
+        scene=dict(
+            xaxis_title="X (Å)",
+            yaxis_title="Y (Å)",
+            zaxis_title="Z (Å)"
+        ),
+        width=900,
+        height=700
+    )
+
+    fig.show()
 
 if __name__ == "__main__":
     main()
