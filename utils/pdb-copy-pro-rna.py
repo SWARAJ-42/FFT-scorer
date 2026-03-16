@@ -6,8 +6,8 @@ from pathlib import Path
 JSON_PATH = "../assets/PRDBv3.json"
 PRDB_DIR = Path("../assets/PRDBv3.0")
 
-UNBOUND_COMPLEX_DIR = Path("../assets/PDBs/UU_C_PDBs")
-OUT_ROOT = Path("../UU_PDBs")
+UNBOUND_COMPLEX_DIR = Path("../assets/PDBs/C_PDB")
+OUT_ROOT = Path("../ALL_PDBs")
 # ------------------------
 
 OUT_ROOT.mkdir(exist_ok=True)
