@@ -57,7 +57,7 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 
 from phase1  import load_uu_cases, DockingCase, Structure, Atom, Chain, parse_pdb
-from phase4 import DockingResult
+from phase4  import DockingResult
 
 
 # ═══════════════════════════════════════════════════════════════════════════
