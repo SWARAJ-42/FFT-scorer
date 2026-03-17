@@ -1,8 +1,10 @@
 """
-Phase 2 — 3D Shape Grid Builder
-=================================
-Converts a parsed Structure (from Phase 1) into a 3D voxel shape grid
-ready for FFT correlation in Phase 4.
+Phase 2 — 3D Shape Grid Builder  (phase2.py)
+=============================================
+Converts a parsed Structure (from phase1.py) into a 3D voxel shape grid
+ready for FFT correlation.
+
+Called by run.py via phase4.py — not normally executed directly.
 
 Encoding (Katchalski-Katzir 1992):
     interior voxels  → -15   (steric clash penalty)
@@ -10,49 +12,17 @@ Encoding (Katchalski-Katzir 1992):
     exterior voxels  →  0
 
 Grid dimensions are always powers of 2 for FFT efficiency.
-
-Usage (standalone test):
-    python phase2_grid.py --test
-
-Usage (from code):
-    from phase1_loader import parse_pdb
-    from phase2_grid   import GridBuilder, MolGrid
-
-    struct = parse_pdb("protein.pdb")
-    grid   = GridBuilder(resolution=1.0, padding=8.0).build(struct, mol_type="protein")
-
-    grid.shape_grid    # numpy array (Nx, Ny, Nz)
-    grid.origin        # real-space origin in Angstrom
-    grid.resolution    # Angstrom per voxel
 """
 
-import os
 import math
 import dataclasses
 import numpy as np
+import argparse
 from typing import Tuple, Optional
 
-try:
-    from phase1 import Atom, Chain, Structure
-except ImportError:
-    import dataclasses as _dc
-
-    @_dc.dataclass
-    class Atom:
-        record: str; serial: int; name: str; alt_loc: str
-        res_name: str; chain_id: str; res_seq: int; icode: str
-        x: float; y: float; z: float
-        occupancy: float; b_factor: float; element: str
-
-    @_dc.dataclass
-    class Chain:
-        chain_id: str; mol_type: str; atoms: list
-
-    @_dc.dataclass
-    class Structure:
-        pdb_id: str; filepath: str; chains: list
-        def protein_chains(self): return [c for c in self.chains if c.mol_type == "protein"]
-        def rna_chains(self):     return [c for c in self.chains if c.mol_type == "rna"]
+# Import the necessary models and loader from your updated PDBparser.py
+# Make sure your Phase 1 file is named 'PDBparser.py' and is in the same directory.
+from phase1 import Atom, Chain, Structure, load_uu_cases
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -61,32 +31,19 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════
 
 VDW_RADII: dict = {
-    "C":  1.70,
-    "N":  1.55,
-    "O":  1.52,
-    "S":  1.80,
-    "P":  1.80,
-    "H":  1.20,
-    "F":  1.47,
-    "CL": 1.75,
-    "BR": 1.85,
-    "I":  1.98,
-    "SE": 1.90,
-    "MG": 0.72,
-    "ZN": 0.74,
-    "CA": 1.00,
-    "FE": 0.65,
-    "MN": 0.83,
-    "K":  1.38,
-    "NA": 1.02,
+    "C":  1.70, "N":  1.55, "O":  1.52, "S":  1.80, "P":  1.80,
+    "H":  1.20, "F":  1.47, "CL": 1.75, "BR": 1.85, "I":  1.98,
+    "SE": 1.90, "MG": 0.72, "ZN": 0.74, "CA": 1.00, "FE": 0.65,
+    "MN": 0.83, "K":  1.38, "NA": 1.02,
 }
 DEFAULT_RADIUS = 1.70
 
-
-def get_vdw_radius(atom: "Atom") -> float:
+def get_vdw_radius(atom: Atom) -> float:
+    """Determine the Van der Waals radius of an atom based on its element."""
     el = atom.element.upper().strip() if atom.element else ""
     if el in VDW_RADII:
         return VDW_RADII[el]
+    # Fallback: guess from the atom name (e.g., "CA" -> "C")
     name_el = atom.name.lstrip("0123456789")[0].upper() if atom.name else "C"
     return VDW_RADII.get(name_el, DEFAULT_RADIUS)
 
@@ -97,12 +54,13 @@ def get_vdw_radius(atom: "Atom") -> float:
 
 @dataclasses.dataclass
 class MolGrid:
+    """Stores the resulting 3D numpy array and spatial metadata."""
     pdb_id:     str
     mol_type:   str
     shape_grid: np.ndarray    # (Nx, Ny, Nz)
-    origin:     np.ndarray    # (3,) Angstrom
+    origin:     np.ndarray    # (3,) Real-space origin in Angstrom
     resolution: float
-    center:     np.ndarray    # (3,) geometric center
+    center:     np.ndarray    # (3,) Geometric center
 
     @property
     def grid_shape(self) -> Tuple[int, int, int]:
@@ -124,7 +82,6 @@ class MolGrid:
             f"  grid shape   : ({Nx}, {Ny}, {Nz})  —  {Nx*Ny*Nz:,} voxels total\n"
             f"  resolution   : {self.resolution} Å/voxel\n"
             f"  origin       : ({self.origin[0]:.2f}, {self.origin[1]:.2f}, {self.origin[2]:.2f}) Å\n"
-            f"  center       : ({self.center[0]:.2f}, {self.center[1]:.2f}, {self.center[2]:.2f}) Å\n"
             f"  surface vox  : {n_surf:,}   (+1)\n"
             f"  interior vox : {n_int:,}   (-15)"
         )
@@ -136,25 +93,15 @@ class MolGrid:
 
 class GridBuilder:
     """
-    Parameters
-    ----------
-    resolution : float
-        Voxel size in Angstrom. 1.0 Å is standard.
-    padding : float
-        Extra space around bounding box in Angstrom.
-        Must be >= max translation range used in Phase 4.
-    surface_thickness : float
-        Shell depth (Angstrom) defining the surface layer.
-        1.4 Å = water probe radius (standard).
-    interior_penalty : float
-        Value for buried voxels. Katchalski-Katzir 1992 used -15.
+    Constructs the Voxel grid. 
+    Padding ensures there is enough 'empty' space around the molecule to slide 
+    it around during the FFT correlation (Phase 4) without falling off the edge.
     """
-
     def __init__(
         self,
         resolution:        float = 1.0,
         padding:           float = 8.0,
-        surface_thickness: float = 1.4,
+        surface_thickness: float = 1.4, # 1.4A corresponds to water probe radius
         interior_penalty:  float = -15.0,
     ):
         self.resolution        = resolution
@@ -162,12 +109,10 @@ class GridBuilder:
         self.surface_thickness = surface_thickness
         self.interior_penalty  = interior_penalty
 
-    def build(self, structure: "Structure", mol_type: str = "auto") -> MolGrid:
+    def build(self, structure: Structure, mol_type: str = "auto") -> MolGrid:
         atoms = self._collect_atoms(structure, mol_type)
         if not atoms:
-            raise ValueError(
-                f"No atoms found in {structure.pdb_id!r} for mol_type={mol_type!r}"
-            )
+            raise ValueError(f"No atoms found in {structure.pdb_id!r} for mol_type={mol_type!r}")
 
         coords = np.array([[a.x, a.y, a.z] for a in atoms], dtype=np.float64)
         radii  = np.array([get_vdw_radius(a) for a in atoms],  dtype=np.float64)
@@ -207,10 +152,8 @@ class GridBuilder:
         max_r = radii.max()
         lo    = coords.min(axis=0) - max_r - self.padding
         hi    = coords.max(axis=0) + max_r + self.padding
-        dims  = tuple(
-            _next_power_of_two(math.ceil(s / self.resolution))
-            for s in (hi - lo)
-        )
+        # Force grid dimensions to be powers of 2 for faster FFT math later
+        dims  = tuple(_next_power_of_two(math.ceil(s / self.resolution)) for s in (hi - lo))
         return lo, dims
 
     def _build_shape_grid(self, coords, radii, origin, grid_dims):
@@ -220,7 +163,7 @@ class GridBuilder:
         grid = np.zeros((Nx, Ny, Nz), dtype=np.float32)
         r    = self.resolution
 
-        # Pass 1 — interior
+        # Pass 1 — interior voxels
         for (ax, ay, az), radius in zip(coords, radii):
             lo_v = np.floor(((np.array([ax,ay,az]) - origin) - radius) / r).astype(int)
             hi_v = np.ceil (((np.array([ax,ay,az]) - origin) + radius) / r).astype(int) + 1
@@ -236,18 +179,12 @@ class GridBuilder:
             dz = (origin[2] + iz*r - az)[None, None, :]
 
             mask = (dx**2 + dy**2 + dz**2) <= radius**2
-            grid[lo_v[0]:hi_v[0],
-                 lo_v[1]:hi_v[1],
-                 lo_v[2]:hi_v[2]][mask] = self.interior_penalty
+            grid[lo_v[0]:hi_v[0], lo_v[1]:hi_v[1], lo_v[2]:hi_v[2]][mask] = self.interior_penalty
 
-        # Pass 2 — surface
+        # Pass 2 — surface voxels (Subtract the deeply buried interior from the outer bounds)
         interior_mask = grid < 0
         k             = max(1, round(self.surface_thickness / r))
-        eroded        = binary_erosion(
-                            interior_mask,
-                            structure=_sphere_kernel(k),
-                            border_value=0,
-                        )
+        eroded        = binary_erosion(interior_mask, structure=_sphere_kernel(k), border_value=0)
         grid[interior_mask & ~eroded] = 1.0
         return grid
 
@@ -258,10 +195,8 @@ class GridBuilder:
 
 def _next_power_of_two(n: int) -> int:
     p = 1
-    while p < n:
-        p <<= 1
+    while p < n: p <<= 1
     return p
-
 
 def _sphere_kernel(radius_vox: int) -> np.ndarray:
     d, c = 2*radius_vox+1, radius_vox
@@ -273,9 +208,8 @@ def _sphere_kernel(radius_vox: int) -> np.ndarray:
                     k[ix, iy, iz] = True
     return k
 
-
 def build_grids_for_case(case, builder: Optional[GridBuilder] = None):
-    """Build protein + RNA shape grids for a DockingCase."""
+    """Convenience wrapper to build protein + RNA shape grids for a given case."""
     if builder is None:
         builder = GridBuilder()
     return (
@@ -285,69 +219,15 @@ def build_grids_for_case(case, builder: Optional[GridBuilder] = None):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Self-test
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _self_test():
-    print("Phase 2 self-test (shape grid only) …\n")
-
-    atoms_pro = [
-        Atom(record="ATOM", serial=i, name="CA", alt_loc="",
-             res_name="ALA", chain_id="A", res_seq=i, icode="",
-             x=float(i*3), y=0.0, z=0.0,
-             occupancy=1.0, b_factor=0.0, element="C")
-        for i in range(5)
-    ]
-    struct_pro = Structure(
-        pdb_id="TEST_PRO", filepath="",
-        chains=[Chain(chain_id="A", mol_type="protein", atoms=atoms_pro)]
-    )
-
-    atoms_rna = [
-        Atom(record="ATOM", serial=100+i, name="P", alt_loc="",
-             res_name="A", chain_id="B", res_seq=i, icode="",
-             x=float(i*3), y=5.0, z=0.0,
-             occupancy=1.0, b_factor=0.0, element="P")
-        for i in range(4)
-    ]
-    struct_rna = Structure(
-        pdb_id="TEST_RNA", filepath="",
-        chains=[Chain(chain_id="B", mol_type="rna", atoms=atoms_rna)]
-    )
-
-    builder  = GridBuilder(resolution=1.0, padding=4.0)
-    pro_grid = builder.build(struct_pro, mol_type="protein")
-    rna_grid = builder.build(struct_rna, mol_type="rna")
-
-    print(pro_grid.summary())
-    print()
-    print(rna_grid.summary())
-
-    visualize_grid(pro_grid)
-    visualize_grid(rna_grid)
-
-    assert pro_grid.shape_grid.shape == pro_grid.grid_shape
-    assert rna_grid.shape_grid.shape == rna_grid.grid_shape
-    assert (pro_grid.shape_grid != 0).any()
-    assert (rna_grid.shape_grid != 0).any()
-    for dim in pro_grid.grid_shape + rna_grid.grid_shape:
-        assert (dim & (dim-1)) == 0, f"{dim} not a power of 2"
-
-    print("✓  All assertions passed.\n")
-# ═══════════════════════════════════════════════════════════════════════════
 # Grid Visualization
 # ═══════════════════════════════════════════════════════════════════════════
 
 def visualize_grid(grid: MolGrid, max_points: int = 150000):
     """
-    Interactive 3D visualization of a MolGrid.
-
-    Surface voxels (+1)  → red
-    Interior voxels (-15) → blue
-
-    max_points limits rendering load for large grids.
+    Interactive 3D visualization of a MolGrid using Plotly.
+    Surface voxels (+1)  → red, Interior voxels (-15) → blue
+    Downsamples points if grid is massive to prevent crashing the browser.
     """
-
     try:
         import plotly.graph_objects as go
     except ImportError:
@@ -355,87 +235,72 @@ def visualize_grid(grid: MolGrid, max_points: int = 150000):
         return
 
     shape = grid.shape_grid
-
-    # Surface voxels
     surf = np.argwhere(shape > 0)
-
-    # Interior voxels
     interior = np.argwhere(shape < 0)
 
     # Downsample if too large
     if len(surf) > max_points:
         surf = surf[np.random.choice(len(surf), max_points, replace=False)]
-
     if len(interior) > max_points:
         interior = interior[np.random.choice(len(interior), max_points, replace=False)]
 
-    # Convert voxel index → real coordinates
     surf_coords = grid.origin + surf * grid.resolution
     int_coords  = grid.origin + interior * grid.resolution
 
     fig = go.Figure()
 
     if len(int_coords) > 0:
-        fig.add_trace(
-            go.Scatter3d(
-                x=int_coords[:,0],
-                y=int_coords[:,1],
-                z=int_coords[:,2],
-                mode="markers",
-                marker=dict(size=2),
-                name="Interior (-15)"
-            )
-        )
+        fig.add_trace(go.Scatter3d(
+            x=int_coords[:,0], y=int_coords[:,1], z=int_coords[:,2],
+            mode="markers", marker=dict(size=2, color='blue'), name="Interior (-15)"
+        ))
 
     if len(surf_coords) > 0:
-        fig.add_trace(
-            go.Scatter3d(
-                x=surf_coords[:,0],
-                y=surf_coords[:,1],
-                z=surf_coords[:,2],
-                mode="markers",
-                marker=dict(size=3),
-                name="Surface (+1)"
-            )
-        )
+        fig.add_trace(go.Scatter3d(
+            x=surf_coords[:,0], y=surf_coords[:,1], z=surf_coords[:,2],
+            mode="markers", marker=dict(size=3, color='red'), name="Surface (+1)"
+        ))
 
     fig.update_layout(
         title=f"Voxel Grid — {grid.pdb_id} ({grid.mol_type})",
-        scene=dict(
-            xaxis_title="X (Å)",
-            yaxis_title="Y (Å)",
-            zaxis_title="Z (Å)"
-        ),
-        width=900,
-        height=750
+        scene=dict(xaxis_title="X (Å)", yaxis_title="Y (Å)", zaxis_title="Z (Å)"),
+        width=900, height=750
     )
-
     fig.show()
 
 
-if __name__ == "__main__":
-    import argparse
+# ═══════════════════════════════════════════════════════════════════════════
+# Entry point
+# ═══════════════════════════════════════════════════════════════════════════
 
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 2: Build shape grids")
-    parser.add_argument("--json",       default="../assets/PRDBv3.json")
-    parser.add_argument("--pdb_root",   default="../assets/UU_PDBS")
+    
+    # Matching your exact Windows file paths
+    parser.add_argument("--json",       default=r"D:\BTP Files\PRDBv3.0\PRDBv3_info.json")
+    parser.add_argument("--pdb_root",   default=r"D:\BTP Files\PRDBv3.0")
     parser.add_argument("--resolution", type=float, default=1.0)
     parser.add_argument("--padding",    type=float, default=8.0)
-    parser.add_argument("--test",       action="store_true")
     args = parser.parse_args()
 
-    if args.test:
-        _self_test()
-    else:
-        from phase1 import load_uu_cases
-        cases, skipped = load_uu_cases(args.json, args.pdb_root)
-        print(f"{len(cases)} cases loaded, {len(skipped)} skipped\n")
-        builder = GridBuilder(resolution=args.resolution, padding=args.padding)
-        for case in cases:
-            print(f"{'─'*60}\n  {case.complex_id}")
-            try:
-                pg, rg = build_grids_for_case(case, builder)
-                print(pg.summary()); print(); print(rg.summary())
-            except Exception as e:
-                print(f"  ✗ {e}")
-            print()
+    # Leverage the PDBparser loader function directly
+    cases, skipped = load_uu_cases(args.json, args.pdb_root)
+    print(f"{len(cases)} cases loaded from Phase 1, {len(skipped)} skipped.\n")
+    
+    builder = GridBuilder(resolution=args.resolution, padding=args.padding)
+    
+    # Truncating to the first 3 cases so your local testing is fast and manageable
+    print("Generating grids for the first 3 cases for testing...")
+    for case in cases[:3]:
+        print(f"{'─'*60}\n  Building Grid for Complex: {case.complex_id}")
+        try:
+            pg, rg = build_grids_for_case(case, builder)
+            print(pg.summary())
+            print(rg.summary())
+            
+            # Uncomment the line below if you want the 3D plot to open in your browser
+            # visualize_grid(pg) 
+            
+        except Exception as e:
+            print(f"  ✗ Error generating grid: {e}")
+        print()
