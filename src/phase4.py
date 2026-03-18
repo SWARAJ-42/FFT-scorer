@@ -14,12 +14,12 @@ import argparse
 import torch
 import pickle
 from scipy.ndimage import affine_transform
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 from dataclasses import dataclass
 
 # Local imports from your pipeline
 from phase1 import load_uu_cases, Structure
-from phase2 import GridBuilder, MolGrid, _next_power_of_two, get_vdw_radius
+from phase2 import GridBuilder, _next_power_of_two, get_vdw_radius
 from phase3 import SO3Sampler
 
 

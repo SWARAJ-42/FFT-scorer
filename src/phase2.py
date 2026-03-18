@@ -28,6 +28,7 @@ from phase1 import Atom, Chain, Structure, load_uu_cases
 # ═══════════════════════════════════════════════════════════════════════════
 # VDW Radii  (Angstrom) — element-based
 # Source: Bondi (1964) + AMBER99 supplement
+# https://periodictable.com/Properties/A/VanDerWaalsRadius.v.html
 # ═══════════════════════════════════════════════════════════════════════════
 
 VDW_RADII: dict = {

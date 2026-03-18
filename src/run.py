@@ -78,8 +78,8 @@ from phase5 import run_phase5, BenchmarkResult
 # Defaults — point directly at your BTP data folder
 # ══════════════════════════════════════════════════════════════════════════
 
-DEFAULT_JSON     = r"D:\BTP Files\PRDBv3.0\PRDBv3_info.json"
-DEFAULT_PDB_ROOT = r"D:\BTP Files\PRDBv3.0"
+DEFAULT_JSON     = "../assets/PRDBv3.json"
+DEFAULT_PDB_ROOT = "../assets/ALL_PDBs"
 DEFAULT_OUTPUT   = "generated_PDBS"
 DEFAULT_RESULTS  = "results.pkl"
 
