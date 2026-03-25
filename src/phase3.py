@@ -26,7 +26,7 @@ import argparse
 from typing import Iterator, List, Tuple
 
 # Updated import to reflect your newly renamed file
-from phase1 import load_uu_cases
+from phase1 import load_cases
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Quaternion ↔ Rotation matrix conversions
@@ -382,7 +382,7 @@ if __name__ == "__main__":
         visualize_rotation_angles(sampler.rotations)
 
         # Load one docking case using the local paths provided
-        cases, _ = load_uu_cases(args.json, args.pdb_root)
+        cases, _ = load_cases(args.json, args.pdb_root)
 
         # Fixed indentation here: previously, rna_coords and animation were accidentally outside the `if cases` block
         if cases:

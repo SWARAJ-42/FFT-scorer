@@ -67,7 +67,7 @@ import time
 from typing import List, Dict, Set
 
 # ── Pipeline phase imports ─────────────────────────────────────────────────
-from phase1 import load_uu_cases, print_summary, validate_case, DockingCase, visualize_structure
+from phase1 import load_cases, print_summary, validate_case, DockingCase, visualize_structure
 from phase2 import GridBuilder, build_grids_for_case, visualize_grid
 from phase3 import SO3Sampler, visualize_rotation_axes, visualize_rotation_angles
 from phase4 import FFTDocker, DockingResult
@@ -115,7 +115,7 @@ def _load_and_filter_cases(
         print("        Check the --json argument or verify the path exists.")
         sys.exit(1)
 
-    cases, skipped = load_uu_cases(json_path, pdb_root)
+    cases, skipped = load_cases(json_path, pdb_root)
 
     if not cases:
         print("[ERROR] No UU docking cases could be loaded.")
@@ -124,7 +124,7 @@ def _load_and_filter_cases(
 
     print_summary(cases, skipped)
 
-    # Build a lookup map (case ID is always stored upper-case after load_uu_cases)
+    # Build a lookup map (case ID is always stored upper-case after load_cases)
     case_map: Dict[str, DockingCase] = {c.complex_id.upper(): c for c in cases}
 
     if not requested:

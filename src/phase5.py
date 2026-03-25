@@ -56,7 +56,7 @@ import dataclasses
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 
-from phase1  import load_uu_cases, DockingCase, Structure, Atom, Chain, parse_pdb
+from phase1  import load_cases, DockingCase, Structure, Atom, Chain, parse_pdb
 from phase4  import DockingResult
 
 
@@ -710,7 +710,7 @@ if __name__ == "__main__":
         all_results: Dict[str, List[DockingResult]] = pickle.load(fh)
 
     # Load structures
-    cases, skipped = load_uu_cases(args.json, args.pdb_root)
+    cases, skipped = load_cases(args.json, args.pdb_root)
     case_map = {c.complex_id: c for c in cases}
 
     all_benchmarks = []

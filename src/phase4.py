@@ -18,7 +18,7 @@ from typing import List, Tuple
 from dataclasses import dataclass
 
 # Local imports from your pipeline
-from phase1 import load_uu_cases, Structure
+from phase1 import load_cases, Structure
 from phase2 import GridBuilder, _next_power_of_two, get_vdw_radius
 from phase3 import SO3Sampler
 
@@ -220,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--resolution", type=float, default=1.0, help="Grid voxel resolution")
     args = parser.parse_args()
 
-    cases, skipped = load_uu_cases(args.json, args.pdb_root)
+    cases, skipped = load_cases(args.json, args.pdb_root)
     if not cases:
         print("No cases loaded. Check paths.")
         exit()

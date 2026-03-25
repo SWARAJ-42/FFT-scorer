@@ -22,7 +22,7 @@ from typing import Tuple, Optional
 
 # Import the necessary models and loader from your updated PDBparser.py
 # Make sure your Phase 1 file is named 'PDBparser.py' and is in the same directory.
-from phase1 import Atom, Chain, Structure, load_uu_cases
+from phase1 import Atom, Chain, Structure, load_cases
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -285,7 +285,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Leverage the PDBparser loader function directly
-    cases, skipped = load_uu_cases(args.json, args.pdb_root)
+    cases, skipped = load_cases(args.json, args.pdb_root)
     print(f"{len(cases)} cases loaded from Phase 1, {len(skipped)} skipped.\n")
     
     builder = GridBuilder(resolution=args.resolution, padding=args.padding)

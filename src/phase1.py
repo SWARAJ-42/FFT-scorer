@@ -182,7 +182,7 @@ def resolve_pdb_path(pdb_root: str, complex_id: str, pdb_name: str) -> Optional[
     path = os.path.join(pdb_root, complex_id.upper(), filename)
     return path if os.path.isfile(path) else None
 
-def load_uu_cases(json_path: str, pdb_root: str):
+def load_cases(json_path: str, pdb_root: str):
     # Ensure the JSON file exists before attempting to open it
     if not os.path.isfile(json_path):
         print(f"Error: JSON file not found at {json_path}")
@@ -205,7 +205,7 @@ def load_uu_cases(json_path: str, pdb_root: str):
     for rec in records:
         docking_case = rec.get("Docking_case", "").strip().upper()
 
-        if docking_case != "UU":
+        if docking_case == "UU":
             continue
 
         complex_id = clean_pdb_id(rec.get("C_PDB", ""))
@@ -372,7 +372,7 @@ def main():
     print(f"Loading JSON : {args.json}")
     print(f"PDB root     : {args.pdb_root}")
 
-    cases, skipped = load_uu_cases(args.json, args.pdb_root)
+    cases, skipped = load_cases(args.json, args.pdb_root)
 
     if cases:
         print("Opening visualization for first case in your default web browser...")
