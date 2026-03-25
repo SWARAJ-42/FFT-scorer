@@ -177,10 +177,14 @@ def parse_pdb(filepath: str, pdb_id: str = "") -> Structure:
 # ──────────────────────────────────────────────
 
 def resolve_pdb_path(pdb_root: str, complex_id: str, pdb_name: str) -> Optional[str]:
-    # Ensure standard extension, assumes subfolders are named exactly as the complex ID
-    filename = pdb_name.upper() + ".pdb"
-    path = os.path.join(pdb_root, complex_id.upper(), filename)
-    return path if os.path.isfile(path) else None
+    folder = os.path.join(pdb_root, complex_id.upper())
+    
+    # Try exact name first, then upper, then lower
+    for filename in [pdb_name + ".pdb", pdb_name.upper() + ".pdb", pdb_name.lower() + ".pdb"]:
+        path = os.path.join(folder, filename)
+        if os.path.isfile(path):
+            return path
+    return None
 
 def load_cases(json_path: str, pdb_root: str):
     # Ensure the JSON file exists before attempting to open it
@@ -357,13 +361,13 @@ def main():
     # Updated defaults to use Windows raw strings pointing directly to your local BTP folder
     parser.add_argument(
         "--json",
-        default=r"D:\BTP Files\PRDBv3.0\PRDBv3_info.json",
+        default="../assets/PRDBv3.json",
         help="Path to PRDBv3_info.json",
     )
 
     parser.add_argument(
         "--pdb_root",
-        default=r"D:\BTP Files\PRDBv3.0",
+        default="../assets/ALL_PDBs",
         help="Root folder containing complex subfolders",
     )
 

@@ -695,7 +695,7 @@ if __name__ == "__main__":
         description="Phase 5: Generate docked PDBs and benchmark with RMSD"
     )
     parser.add_argument("--json",      default="../assets/PRDBv3.json")
-    parser.add_argument("--pdb_root",  default="../assets/UU_PDBS")
+    parser.add_argument("--pdb_root",  default="../assets/ALL_PDBs")
     parser.add_argument("--results",   required=True,
                         help="Path to pickle file containing docking results dict "
                              "{complex_id: List[DockingResult]}")

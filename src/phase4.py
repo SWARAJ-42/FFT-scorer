@@ -214,8 +214,8 @@ class FFTDocker:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4: FFT Correlation")
     
-    parser.add_argument("--json",       default=r"D:\BTP Files\PRDBv3.0\PRDBv3_info.json")
-    parser.add_argument("--pdb_root",   default=r"D:\BTP Files\PRDBv3.0")
+    parser.add_argument("--json",       default="../assets/PRDBv3.json")
+    parser.add_argument("--pdb_root",   default="../assets/PRDBv3.0")
     parser.add_argument("--step",       type=float, default=30.0, help="Angular step size (degrees)")
     parser.add_argument("--resolution", type=float, default=1.0, help="Grid voxel resolution")
     args = parser.parse_args()

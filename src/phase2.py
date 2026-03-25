@@ -278,8 +278,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 2: Build shape grids")
     
     # Matching your exact Windows file paths
-    parser.add_argument("--json",       default=r"D:\BTP Files\PRDBv3.0\PRDBv3_info.json")
-    parser.add_argument("--pdb_root",   default=r"D:\BTP Files\PRDBv3.0")
+    parser.add_argument("--json",       default=r"../assets/PRDBv3.json")
+    parser.add_argument("--pdb_root",   default=r"../assets/ALL_PDBs")
     parser.add_argument("--resolution", type=float, default=1.0)
     parser.add_argument("--padding",    type=float, default=8.0)
     args = parser.parse_args()

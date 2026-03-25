@@ -359,8 +359,8 @@ if __name__ == "__main__":
     parser.add_argument("--test",  action="store_true", help="Run self-test and exit")
     
     # Added your specific local Windows paths so it correctly links to your data
-    parser.add_argument("--json", default=r"D:\BTP Files\PRDBv3.0\PRDBv3_info.json")
-    parser.add_argument("--pdb_root", default=r"D:\BTP Files\PRDBv3.0")
+    parser.add_argument("--json", default="../assets/PRDBv3.json")
+    parser.add_argument("--pdb_root", default="../assets/ALL_PDBs")
     
     args = parser.parse_args()
 
