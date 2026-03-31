@@ -122,7 +122,7 @@ def detect_mol_type(residue_names: Set[str]) -> str:
 def parse_pdb(filepath: str, pdb_id: str = "") -> Structure:
     chains_dict: Dict[str, List[Atom]] = {}
 
-    with open(filepath, "r", encoding="utf-8") as fh:
+    with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             rec = line[:6].strip()
             if rec not in ("ATOM", "HETATM"):
@@ -192,7 +192,7 @@ def load_cases(json_path: str, pdb_root: str):
         print(f"Error: JSON file not found at {json_path}")
         return [], [{"reason": "JSON not found"}]
 
-    with open(json_path, "r", encoding="utf-8") as fh:
+    with open(json_path, "r", encoding="utf-8", errors="replace") as fh:
         records = json.load(fh)
 
     if isinstance(records, dict):
