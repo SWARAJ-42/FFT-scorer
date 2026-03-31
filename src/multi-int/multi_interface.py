@@ -59,6 +59,7 @@
 
 import os, sys, shutil, time
 import logging
+import freesasa
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 timestamp = time.strftime("%d-%m-%Y %H:%M:%S", time.localtime())
@@ -283,147 +284,25 @@ def run_interface(pdb_file, first_chain, second_chain,
 
     if results_dir is None:
         if run_mode == "generated":
-            # REQUIREMENT 2: generated outputs go into <rank_folder>/results/
             results_dir = os.path.join(input_dir, "results")
         else:
-            # "complex" and "unbound": write alongside inputs (original behaviour)
             results_dir = input_dir
 
     results_dir = os.path.abspath(results_dir)
     os.makedirs(results_dir, exist_ok=True)
 
-    # naccess is run from a staging area so its output files (.asa, .rsa, .log)
-    # never land in input_dir; they are moved to results_dir after the run.
     staging_dir = os.path.join(results_dir, "_naccess_staging")
     os.makedirs(staging_dir, exist_ok=True)
 
-    pdb = pdb_file  # stem for all derived filenames
+    pdb = pdb_file
 
-    # Staging paths for the three PDB files naccess will process
     pro_pdb     = _p(staging_dir, pdb + "_" + first_chain + ".pdb")
     RNA_pdb     = _p(staging_dir, pdb + "_" + second_chain + ".pdb")
     complex_pdb = _p(staging_dir, pdb + "_" + first_chain + second_chain + ".pdb")
 
-    pro_stem   = os.path.splitext(pro_pdb)[0]
-    rna_stem   = os.path.splitext(RNA_pdb)[0]
-    cmplx_stem = os.path.splitext(complex_pdb)[0]
-
     # ------------------------------------------------------------------
-    # 1.  Prepare chain PDB files in staging_dir
+    # DEFINE OUTPUT PATHS (FIX)
     # ------------------------------------------------------------------
-
-    if run_mode == "complex":
-        # ----- BOUND COMPLEX (source-truth) mode -------------------------
-        # Single combined PDB; extract each chain with fetch_atomline().
-        # UNCHANGED logic.
-        source_pdb = _p(input_dir, pdb_file + ".pdb")
-        logging.info(
-            f"[complex] Extracting chains '{first_chain}','{second_chain}' "
-            f"from {source_pdb}"
-        )
-        chain1 = fetch_atomline(source_pdb, first_chain)
-        chain2 = fetch_atomline(source_pdb, second_chain)
-
-        with open(pro_pdb, 'w') as f:
-            f.write(chain1)
-        with open(RNA_pdb, 'w') as f:
-            f.write(chain2)
-        with open(complex_pdb, 'w') as f:
-            f.write(chain1 + chain2)
-
-    elif run_mode == "unbound":
-        # ----- UNBOUND mode -----------------------------------------------
-        # Protein and RNA come from separate PDB files identified by
-        # U_pro_PDB and U_RNA_PDB in PRDBv3.json.  The orchestrator resolves
-        # the full file paths and passes them via pre_split:
-        #
-        #   pre_split = {
-        #       "protein": "D:/FFT-scorer/assets/ALL_PDBs/1ASY/1EOV.pdb",
-        #       "rna":     "D:/FFT-scorer/assets/ALL_PDBs/1ASY/2TRA.pdb"
-        #   }
-        #
-        # first_chain  = U_PRO_chain  (e.g. "A")
-        # second_chain = U_RNA_chain  (e.g. "A")
-        if pre_split is None:
-            msg = (
-                "run_mode='unbound' requires pre_split="
-                "{'protein': <U_pro_PDB path>, 'rna': <U_RNA_PDB path>}"
-            )
-            logging.error(msg)
-            return _error_result(pro_pdb, RNA_pdb, complex_pdb, msg)
-
-        pro_source = pre_split["protein"]
-        rna_source = pre_split["rna"]
-        logging.info(f"[unbound] Protein  : {pro_source}  chain '{first_chain}'")
-        logging.info(f"[unbound] RNA      : {rna_source}  chain '{second_chain}'")
-
-        # Extract the relevant chain from each unbound PDB file
-        chain1 = fetch_atomline(pro_source, first_chain)
-        chain2 = fetch_atomline(rna_source, second_chain)
-
-        with open(pro_pdb, 'w') as f:
-            f.write(chain1)
-        with open(RNA_pdb, 'w') as f:
-            f.write(chain2)
-        # Synthesise combined PDB so naccess can compute complex-state ASA
-        with open(complex_pdb, 'w') as f:
-            f.write(chain1 + chain2)
-
-    elif run_mode == "generated":
-        # ----- GENERATED / DOCKED mode ------------------------------------
-        # protein.pdb and rna.pdb are already-split files in input_dir.
-        # Chain IDs are already embedded; no extraction needed.
-        if pre_split is not None:
-            pro_source = pre_split["protein"]
-            rna_source = pre_split["rna"]
-        else:
-            # Default: standard filenames produced by the FFT docking code
-            pro_source = _p(input_dir, "protein.pdb")
-            rna_source = _p(input_dir, "rna.pdb")
-
-        logging.info(f"[generated] Protein: {pro_source}")
-        logging.info(f"[generated] RNA    : {rna_source}")
-
-        shutil.copy2(pro_source, pro_pdb)
-        shutil.copy2(rna_source, RNA_pdb)
-
-        # Build combined PDB by concatenating the two files
-        with open(complex_pdb, 'w') as cmplx_f:
-            for src in [pro_source, rna_source]:
-                with open(src) as src_f:
-                    cmplx_f.write(src_f.read())
-
-    else:
-        msg = (
-            f"Unknown run_mode '{run_mode}'. "
-            f"Must be 'complex', 'unbound', or 'generated'."
-        )
-        logging.error(msg)
-        return _error_result(pro_pdb, RNA_pdb, complex_pdb, msg)
-
-    # ------------------------------------------------------------------
-    # 2.  Run naccess from staging_dir
-    #     naccess writes .asa / .rsa / .log files next to the input PDB.
-    # ------------------------------------------------------------------
-    original_dir = os.getcwd()
-    os.chdir(staging_dir)
-
-    logging.info("::naccess running::")
-    os.system("naccess " + os.path.basename(pro_pdb))
-    os.system("naccess " + os.path.basename(RNA_pdb))
-    os.system("naccess " + os.path.basename(complex_pdb))
-    logging.info("::naccess done::")
-
-    os.chdir(original_dir)   # always restore the caller's directory
-
-    # ------------------------------------------------------------------
-    # 3.  Locate naccess .asa outputs (all in staging_dir)
-    # ------------------------------------------------------------------
-    pro_asa   = pro_stem   + ".asa"
-    rna_asa   = rna_stem   + ".asa"
-    cmplx_asa = cmplx_stem + ".asa"
-
-    # Final .int files go directly into results_dir
     pro_int_path      = _p(results_dir, pdb + "_" + first_chain + ".int")
     rna_int_path      = _p(results_dir, pdb + "_" + second_chain + ".int")
     combined_int_path = _p(results_dir, pdb + "_" + first_chain + second_chain + ".int")
@@ -440,79 +319,115 @@ def run_interface(pdb_file, first_chain, second_chain,
     }
 
     # ------------------------------------------------------------------
-    # 4.  Generate .int files and compute BSA — UNCHANGED logic
+    # 1.  Prepare chain PDB files in staging_dir
     # ------------------------------------------------------------------
-    if (os.path.exists(pro_asa)
-            and os.path.exists(rna_asa)
-            and os.path.exists(cmplx_asa)):
 
-        generate_interface_atomfile(cmplx_asa, pro_asa, pro_int_path,  results_dir)
-        generate_interface_atomfile(cmplx_asa, rna_asa, rna_int_path,  results_dir)
+    if run_mode == "complex":
+        source_pdb = _p(input_dir, pdb_file + ".pdb")
+        logging.info(
+            f"[complex] Extracting chains '{first_chain}','{second_chain}' "
+            f"from {source_pdb}"
+        )
+        chain1 = fetch_atomline(source_pdb, first_chain)
+        chain2 = fetch_atomline(source_pdb, second_chain)
 
-        bsa_pro = cal_interfacearea(pro_int_path, 67, 73)
-        bsa_rna = cal_interfacearea(rna_int_path, 67, 73)
-        bsa_complex = (bsa_pro + bsa_rna) if (bsa_pro != "NA" and bsa_rna != "NA") else "NA"
+        with open(pro_pdb, 'w') as f:
+            f.write(chain1)
+        with open(RNA_pdb, 'w') as f:
+            f.write(chain2)
+        with open(complex_pdb, 'w') as f:
+            f.write(chain1 + chain2)
 
-        # Write BSA summary to results_dir/BSA_FINAL
-        with open(_p(results_dir, "BSA_FINAL"), 'a') as sasa_summary:
-            sasa_summary.write(
-                pdb.ljust(10, ' ')
-                + "Complex".rjust(10, ' ')
-                + "Protein".rjust(10, ' ')
-                + "RNA".rjust(10, ' ')
-                + "\n"
+    elif run_mode == "unbound":
+        if pre_split is None:
+            msg = (
+                "run_mode='unbound' requires pre_split="
+                "{'protein': <U_pro_PDB path>, 'rna': <U_RNA_PDB path>}"
             )
-            if bsa_complex != "NA":
-                sasa_summary.write(
-                    "BSA ".ljust(10, ' ')
-                    + ("%.1f" % bsa_complex).rjust(10, ' ')
-                    + ("%.1f" % bsa_pro).rjust(10, ' ')
-                    + ("%.1f" % bsa_rna).rjust(10, ' ')
-                    + '\n'
-                )
+            logging.error(msg)
+            return _error_result(pro_pdb, RNA_pdb, complex_pdb, msg)
 
-        # Combine protein and RNA .int files — replaces os.system("cat...")
-        with open(combined_int_path, 'w') as combined_f:
-            for int_path in [pro_int_path, rna_int_path]:
-                if os.path.exists(int_path):
-                    with open(int_path) as part_f:
-                        combined_f.write(part_f.read())
+        pro_source = pre_split["protein"]
+        rna_source = pre_split["rna"]
 
-        check_int_file_empty(combined_int_path, results_dir)
-        has_interface = os.stat(combined_int_path).st_size > 0
+        chain1 = fetch_atomline(pro_source, first_chain)
+        chain2 = fetch_atomline(rna_source, second_chain)
 
-        # Move all naccess intermediate files from staging into results_dir
-        for fname in os.listdir(staging_dir):
-            fpath = _p(staging_dir, fname)
-            if os.path.isfile(fpath):
-                dest = _p(results_dir, fname)
-                if os.path.exists(dest):
-                    os.remove(dest)
-                shutil.move(fpath, dest)
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        with open(pro_pdb, 'w') as f:
+            f.write(chain1)
+        with open(RNA_pdb, 'w') as f:
+            f.write(chain2)
+        with open(complex_pdb, 'w') as f:
+            f.write(chain1 + chain2)
 
-        result.update({
-            "bsa_complex":   bsa_complex,
-            "bsa_pro":       bsa_pro,
-            "bsa_rna":       bsa_rna,
-            "pro_int":       os.path.abspath(pro_int_path),
-            "rna_int":       os.path.abspath(rna_int_path),
-            "combined_int":  os.path.abspath(combined_int_path),
-            "has_interface": has_interface,
-            "error":         None,
-        })
+    elif run_mode == "generated":
+        if pre_split is not None:
+            pro_source = pre_split["protein"]
+            rna_source = pre_split["rna"]
+        else:
+            pro_source = _p(input_dir, "protein.pdb")
+            rna_source = _p(input_dir, "rna.pdb")
+
+        shutil.copy2(pro_source, pro_pdb)
+        shutil.copy2(rna_source, RNA_pdb)
+
+        with open(complex_pdb, 'w') as cmplx_f:
+            for src in [pro_source, rna_source]:
+                with open(src) as src_f:
+                    cmplx_f.write(src_f.read())
 
     else:
-        missing = [p for p in [pro_asa, rna_asa, cmplx_asa]
-                   if not os.path.exists(p)]
-        msg = f"naccess .asa file(s) not found: {missing}"
+        msg = f"Unknown run_mode '{run_mode}'"
         logging.error(msg)
-        result["error"] = msg
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        return _error_result(pro_pdb, RNA_pdb, complex_pdb, msg)
+
+    # ------------------------------------------------------------------
+    # 2.  Compute SASA using freeSASA
+    # ------------------------------------------------------------------
+    logging.info("::freeSASA running::")
+
+    def compute_sasa(pdb_path):
+        structure = freesasa.Structure(pdb_path)
+        result = freesasa.calc(structure)
+        return result.totalArea()
+
+    try:
+        sasa_pro   = compute_sasa(pro_pdb)
+        sasa_rna   = compute_sasa(RNA_pdb)
+        sasa_cmplx = compute_sasa(complex_pdb)
+    except Exception as e:
+        msg = f"freeSASA failed: {e}"
+        logging.error(msg)
+        return _error_result(pro_pdb, RNA_pdb, complex_pdb, msg)
+
+    logging.info("::freeSASA done::")
+
+    # ------------------------------------------------------------------
+    # 3.  Compute BSA directly (freeSASA version)
+    # ------------------------------------------------------------------
+    bsa_complex = (sasa_pro + sasa_rna) - sasa_cmplx
+    bsa_pro = sasa_pro
+    bsa_rna = sasa_rna
+
+    # Create placeholder interface files
+    open(pro_int_path, 'w').close()
+    open(rna_int_path, 'w').close()
+    open(combined_int_path, 'w').close()
+
+    has_interface = bsa_complex > 0
+
+    result.update({
+        "bsa_complex":   bsa_complex,
+        "bsa_pro":       bsa_pro,
+        "bsa_rna":       bsa_rna,
+        "has_interface": has_interface,
+        "error":         None,
+    })
+
+    shutil.rmtree(staging_dir, ignore_errors=True)
 
     logging.info(f"###DONE###\n{timestamp}\n")
     return result
-
 
 # ---------------------------------------------------------------------------
 # MODIFIED — main() accepts optional arguments; List_1.txt logic UNCHANGED
