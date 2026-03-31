@@ -499,7 +499,7 @@ def run_pipeline(json_path:      str,
     check_naccess_available()   # warns but does NOT abort — lets pipeline run
 
     # ── Load JSON ─────────────────────────────────────────────────────────
-    with open(json_path, 'r') as f:
+    with open(json_path, 'r', encoding="utf-8", errors="replace") as f:
         entries = json.load(f)
     logging.info(f"Loaded {len(entries)} entries from {json_path}")
 
@@ -533,7 +533,7 @@ def run_pipeline(json_path:      str,
 
     # ── Save results JSON ─────────────────────────────────────────────────
     results_json_path = os.path.join(out_dir, "pipeline_results.json")
-    with open(results_json_path, 'w') as f:
+    with open(results_json_path, 'w', encoding="utf-8", errors="replace") as f:
         json.dump(all_results, f, indent=2, default=str)
     logging.info(f"\nSaved pipeline results → {results_json_path}")
 
