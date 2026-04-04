@@ -263,7 +263,7 @@ class FFTDocker:
         # ── NEW: Build electrostatic grids (CPU) ────────────────────────
         use_elec = self.elec_weight > 0
         if use_elec:
-            print("  Building electrostatic grids (CPU)...")
+            print("  Building electrostatic grids (GPU)...")
             pro_eg, rna_eg = build_elec_grids_for_case(
                 case, origin, dims, builder=self.elec_builder
             )

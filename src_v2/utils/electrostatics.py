@@ -27,6 +27,20 @@ Integration
 • phase4.py  — A second FFT cross-correlation is run on the electrostatic
                grids and added to the shape correlation score:
                    corr_total = corr_shape + ELEC_WEIGHT × corr_elec
+
+GPU acceleration
+----------------
+When CuPy is installed and a CUDA device is available the heavy inner loop
+of _compute_coulomb_grid is replaced by a custom CUDA kernel that launches
+one thread per voxel.  Every thread accumulates contributions from all
+charged atoms independently, so the entire Nx×Ny×Nz grid is evaluated in
+a single kernel launch rather than in a Python atom loop.
+
+Runtime selection
+-----------------
+• ElecGridBuilder(use_gpu=True)   — use GPU if available, else CPU (default)
+• ElecGridBuilder(use_gpu=False)  — always use CPU
+• Module-level flag _GPU_AVAILABLE reflects whether CuPy found a device.
 """
 
 import math
@@ -35,6 +49,82 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 
 from phase1 import Atom, Structure
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GPU initialisation  (transparent — all public names unchanged)
+# ═══════════════════════════════════════════════════════════════════════════
+
+try:
+    import cupy as cp                          # type: ignore[import]
+    cp.cuda.runtime.getDeviceCount()           # raises if no CUDA device
+    _GPU_AVAILABLE: bool = True
+except Exception:
+    cp = None                                  # type: ignore[assignment]
+    _GPU_AVAILABLE = False
+
+# CUDA kernel source — one thread per voxel, atom loop on-device.
+# Each thread reads its (ix,iy,iz) from a flat linear index, computes the
+# Coulomb sum over all N_atoms charged atoms, and writes one float to grid.
+_COULOMB_KERNEL_SRC = r"""
+extern "C" __global__
+void coulomb_kernel(
+        float* __restrict__ grid,       /* (Nx*Ny*Nz,)  output            */
+        const float* __restrict__ xs,   /* (Nx,) voxel-centre X coords    */
+        const float* __restrict__ ys,   /* (Ny,) voxel-centre Y coords    */
+        const float* __restrict__ zs,   /* (Nz,) voxel-centre Z coords    */
+        const float* __restrict__ ax,   /* (N_atoms,) atom X              */
+        const float* __restrict__ ay,   /* (N_atoms,) atom Y              */
+        const float* __restrict__ az,   /* (N_atoms,) atom Z              */
+        const float* __restrict__ aq,   /* (N_atoms,) partial charge      */
+        int Nx, int Ny, int Nz,
+        int N_atoms,
+        float r_cut,
+        float diel_slope,
+        float coulomb_k,
+        float max_clip
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = Nx * Ny * Nz;
+    if (idx >= total) return;
+
+    /* Decode flat index → (ix, iy, iz) */
+    int ix =  idx / (Ny * Nz);
+    int iy = (idx /      Nz ) % Ny;
+    int iz =  idx              % Nz;
+
+    float vx = xs[ix];
+    float vy = ys[iy];
+    float vz = zs[iz];
+
+    float phi = 0.0f;
+    for (int a = 0; a < N_atoms; ++a) {
+        float dx   = vx - ax[a];
+        float dy   = vy - ay[a];
+        float dz   = vz - az[a];
+        float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+        if (dist < r_cut) dist = r_cut;
+        float eps  = diel_slope * dist;
+        if (eps < 4.0f) eps = 4.0f;
+        phi += coulomb_k * aq[a] / (eps * dist);
+    }
+
+    /* Clamp to ±max_clip before writing */
+    if      (phi >  max_clip) phi =  max_clip;
+    else if (phi < -max_clip) phi = -max_clip;
+
+    grid[idx] = phi;
+}
+"""
+
+# Compile once at import time (no-op when _GPU_AVAILABLE is False).
+_coulomb_kernel = None
+if _GPU_AVAILABLE:
+    try:
+        _coulomb_kernel = cp.RawKernel(_COULOMB_KERNEL_SRC, "coulomb_kernel")
+    except Exception as _e:
+        _GPU_AVAILABLE = False
+        cp = None   # type: ignore[assignment]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -172,8 +262,18 @@ class ElecGridBuilder:
 
     where  ε(r) = max(4.0, DIEL_SLOPE × r)   (distance-dependent dielectric).
 
+    GPU path (default when CuPy + CUDA are available)
+    --------------------------------------------------
+    A custom CUDA kernel (_coulomb_kernel) is launched with one thread per
+    voxel.  Every thread accumulates all N_atoms contributions in registers
+    and writes a single float32 to the output grid.  Atom coordinates and
+    charges are transferred to the device once as contiguous float32 arrays.
+
+    CPU path (fallback)
+    -------------------
     A spherical cut-off is applied per atom: only voxels within the radius
-    where |φ| would exceed 0.01 kcal/mol/e are updated, keeping the loop fast.
+    where |φ| would exceed 0.01 kcal/mol/e are updated, keeping the loop
+    fast on CPU.
 
     The final grid is clamped to [−max_clip, +max_clip] to prevent extreme
     values near atom centres from dominating the FFT cross-correlation.
@@ -183,17 +283,24 @@ class ElecGridBuilder:
     resolution : Å/voxel  (must match the shape grid used in Phase 4)
     padding    : Å of extra space around the molecule
     max_clip   : kcal/mol/e  — clip potential to this absolute value
+    use_gpu    : True  → use GPU when available (default)
+                 False → always use CPU NumPy path
+    threads_per_block : CUDA threads per block (default 256)
     """
 
     def __init__(
         self,
-        resolution: float = 1.0,
-        padding:    float = 8.0,
-        max_clip:   float = 10.0,
+        resolution:        float = 1.0,
+        padding:           float = 8.0,
+        max_clip:          float = 10.0,
+        use_gpu:           bool  = True,
+        threads_per_block: int   = 256,
     ):
-        self.resolution = resolution
-        self.padding    = padding
-        self.max_clip   = max_clip
+        self.resolution        = resolution
+        self.padding           = padding
+        self.max_clip          = max_clip
+        self.use_gpu           = use_gpu and _GPU_AVAILABLE
+        self.threads_per_block = threads_per_block
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -231,7 +338,10 @@ class ElecGridBuilder:
                 resolution = self.resolution,
             )
 
-        grid = self._compute_coulomb_grid(charged_atoms, origin, dims)
+        if self.use_gpu:
+            grid = self._compute_coulomb_grid_gpu(charged_atoms, origin, dims)
+        else:
+            grid = self._compute_coulomb_grid(charged_atoms, origin, dims)
 
         return ElecGrid(
             pdb_id     = structure.pdb_id,
@@ -258,6 +368,76 @@ class ElecGridBuilder:
                 if abs(q) > 1e-6:
                     charged.append((atom, float(q)))
         return charged
+
+    # ── GPU path ────────────────────────────────────────────────────────────
+
+    def _compute_coulomb_grid_gpu(
+        self,
+        charged_atoms: List[Tuple[Atom, float]],
+        origin:        np.ndarray,
+        dims:          Tuple[int, int, int],
+    ) -> np.ndarray:
+        """
+        GPU Coulombic potential via custom CUDA kernel.
+
+        Transfers atom data to device once, launches one CUDA thread per
+        voxel, and copies the completed float32 grid back to host.
+        Clamping to ±max_clip is performed inside the kernel.
+        """
+        Nx, Ny, Nz = dims
+        r          = np.float32(self.resolution)
+
+        # ── Host-side axis arrays ────────────────────────────────────────
+        xs_h = (origin[0] + np.arange(Nx, dtype=np.float32) * r)
+        ys_h = (origin[1] + np.arange(Ny, dtype=np.float32) * r)
+        zs_h = (origin[2] + np.arange(Nz, dtype=np.float32) * r)
+
+        # ── Atom arrays ──────────────────────────────────────────────────
+        N  = len(charged_atoms)
+        ax = np.empty(N, dtype=np.float32)
+        ay = np.empty(N, dtype=np.float32)
+        az = np.empty(N, dtype=np.float32)
+        aq = np.empty(N, dtype=np.float32)
+        for i, (atom, q) in enumerate(charged_atoms):
+            ax[i] = atom.x
+            ay[i] = atom.y
+            az[i] = atom.z
+            aq[i] = q
+
+        # ── Transfer to device ───────────────────────────────────────────
+        d_xs   = cp.asarray(xs_h)
+        d_ys   = cp.asarray(ys_h)
+        d_zs   = cp.asarray(zs_h)
+        d_ax   = cp.asarray(ax)
+        d_ay   = cp.asarray(ay)
+        d_az   = cp.asarray(az)
+        d_aq   = cp.asarray(aq)
+        d_grid = cp.zeros(Nx * Ny * Nz, dtype=cp.float32)
+
+        # ── Kernel launch ────────────────────────────────────────────────
+        total_voxels  = Nx * Ny * Nz
+        threads        = self.threads_per_block
+        blocks         = math.ceil(total_voxels / threads)
+
+        _coulomb_kernel(
+            (blocks,), (threads,),
+            (
+                d_grid, d_xs, d_ys, d_zs,
+                d_ax, d_ay, d_az, d_aq,
+                np.int32(Nx), np.int32(Ny), np.int32(Nz),
+                np.int32(N),
+                np.float32(R_CUT),
+                np.float32(DIEL_SLOPE),
+                np.float32(COULOMB_K),
+                np.float32(self.max_clip),
+            ),
+        )
+
+        # ── Copy result back to CPU ──────────────────────────────────────
+        grid_flat = cp.asnumpy(d_grid)
+        return grid_flat.reshape(Nx, Ny, Nz)
+
+    # ── CPU path (original algorithm, preserved exactly) ────────────────────
 
     def _compute_coulomb_grid(
         self,
@@ -421,7 +601,11 @@ if __name__ == "__main__":
                         help="Potential clip value in kcal/mol/e (default 10)")
     parser.add_argument("--iso",        type=float, default=1.0,
                         help="Isosurface threshold for visualisation (default 1.0)")
+    parser.add_argument("--no-gpu",     action="store_true",
+                        help="Disable GPU acceleration even if CuPy is available")
     args = parser.parse_args()
+
+    print(f"GPU available : {_GPU_AVAILABLE}")
 
     cases, skipped = load_cases(args.json, args.pdb_root)
     if not cases:
@@ -440,7 +624,11 @@ if __name__ == "__main__":
     rna_coords = _np.array([[a.x, a.y, a.z] for a in rna_atoms])
     origin, dims = mgr.determine_common_shape(pro_coords, rna_coords)
 
-    builder  = ElecGridBuilder(resolution=args.resolution, max_clip=args.clip)
+    builder  = ElecGridBuilder(
+        resolution = args.resolution,
+        max_clip   = args.clip,
+        use_gpu    = not args.no_gpu,
+    )
     pro_eg, rna_eg = build_elec_grids_for_case(case, origin, dims, builder)
 
     print(pro_eg.summary())
