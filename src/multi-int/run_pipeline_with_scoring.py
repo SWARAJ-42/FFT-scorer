@@ -121,13 +121,12 @@ def skipped_result(reason: str) -> dict:
 
 
 def safe_run(label: str, fn, *args, **kwargs) -> dict:
-    """Execute fn with exception handling, including sys.exit() calls."""
+    """Execute fn with exception handling, including sys.exit() from multi_interface."""
     try:
         return fn(*args, **kwargs)
     except SystemExit as exc:
-        # multi_interface.py calls sys.exit() on missing chains / files.
-        # Catch it here so the pipeline keeps running.
-        msg = f"SystemExit in {label} (code={exc.code}) — likely missing chain or file"
+        msg = (f"SystemExit({exc.code}) in {label} — "
+               "likely a missing chain or naccess error. Skipping.")
         logging.warning(msg)
         return {
             "bsa_complex": "NA", "bsa_pro": "NA", "bsa_rna": "NA",
@@ -391,21 +390,15 @@ def score_generated_poses(complex_id: str,
 
     Parameters
     ----------
-    complex_id : str
-        Complex identifier (e.g., "1ASY")
-    truth_result : dict
-        Interface analysis result for bound complex (Mode A)
-    gen_results : dict
-        Dict of {rank_label: interface_result} for all ranks (Mode C)
-    gen_base_dir : str
-        Base directory for generated poses (generated_PDBS/<complex_id>/)
-    truth_dir : str
-        Root of ALL_PDBs/ — used to resolve ground truth PDB path
+    complex_id   : str  — e.g. "1ASY"
+    truth_result : dict — Mode A interface analysis result
+    gen_results  : dict — {rank_label: interface_result} from Mode C
+    gen_base_dir : str  — root of generated_PDBS/
+    truth_dir    : str  — root of ALL_PDBs/ (used to resolve truth PDB path)
 
     Returns
     -------
-    dict
-        {rank_label: score_dict, ...}
+    dict  {rank_label: score_dict}
     """
     scores = {}
 
@@ -415,27 +408,29 @@ def score_generated_poses(complex_id: str,
         )
         return {}
 
-    truth_combined_int = truth_result.get("combined_int", "")
+    truth_combined_int = truth_result.get("combined_int", "") or ""
 
-    if not truth_combined_int or not os.path.exists(truth_combined_int):
-        logging.warning(
-            f"[scoring] {complex_id}  skipped — truth .int file not found: {truth_combined_int}"
-        )
-        return {}
-
-    # Resolve truth PDB: try result dict first, then fall back to known path
+    # Resolve ground truth PDB: try result dict first, then canonical path
     truth_pdb = truth_result.get("combined_pdb") or truth_result.get("pdb_file") or ""
     if not truth_pdb or not os.path.exists(truth_pdb):
-        # Fall back: ALL_PDBs/<complex_id>/<complex_id>.pdb
         candidate = os.path.join(truth_dir, complex_id, f"{complex_id}.pdb")
         if os.path.exists(candidate):
             truth_pdb = candidate
         else:
             logging.warning(
-                f"[scoring] {complex_id}  skipped — could not resolve truth PDB "
-                f"(tried result dict and {candidate})"
+                f"[scoring] {complex_id}  cannot resolve truth PDB "
+                f"(tried result dict and {candidate!r}) — scoring will use "
+                "distance-based fallback for interface detection"
             )
-            return {}
+            truth_pdb = ""   # score_single_rank will handle missing file
+
+    # .int file existence is optional — scoring_engine falls back to distance
+    if truth_combined_int and not os.path.exists(truth_combined_int):
+        logging.warning(
+            f"[scoring] {complex_id}  truth .int not found: {truth_combined_int!r} "
+            "— will use distance-based interface detection"
+        )
+        truth_combined_int = ""
 
     for rank_label, gen_result in gen_results.items():
         if gen_result.get("error") or gen_result.get("skipped"):
@@ -451,13 +446,13 @@ def score_generated_poses(complex_id: str,
             continue
 
         # Resolve file paths
-        rank_dir = os.path.join(gen_base_dir, complex_id, rank_label)
+        rank_dir    = os.path.join(gen_base_dir, complex_id, rank_label)
         results_dir = os.path.join(rank_dir, "results")
 
-        gen_pdb = os.path.join(rank_dir, "combined.pdb")  # Will be generated if absent
-        gen_int_file = gen_result.get("combined_int", "")
-        protein_pdb = os.path.join(rank_dir, "protein.pdb")
-        rna_pdb = os.path.join(rank_dir, "rna.pdb")
+        gen_pdb      = os.path.join(rank_dir, "combined.pdb")
+        gen_int_file = gen_result.get("combined_int", "") or ""
+        protein_pdb  = os.path.join(rank_dir, "protein.pdb")
+        rna_pdb      = os.path.join(rank_dir, "rna.pdb")
 
         # Build combined PDB if it doesn't exist
         if not os.path.exists(gen_pdb):
@@ -521,7 +516,8 @@ def run_pipeline(json_path: str,
                  skip_complex: bool = False,
                  skip_unbound: bool = False,
                  skip_generated: bool = False,
-                 skip_scoring: bool = False) -> dict:
+                 skip_scoring: bool = False,
+                 pdb_filter: str = "") -> dict:
     """
     Run the full pipeline including scoring.
 
@@ -563,6 +559,22 @@ def run_pipeline(json_path: str,
     with open(json_path, 'r') as f:
         entries = json.load(f)
     logging.info(f"Loaded {len(entries)} entries from {json_path}")
+
+    # Apply optional PDB filter
+    if pdb_filter:
+        allowed = {p.strip().upper() for p in pdb_filter.split(",") if p.strip()}
+        entries = [e for e in entries if str(e.get("C_PDB", "")).upper() in allowed]
+        logging.info(
+            f"--pdb_filter applied: processing {len(entries)} entr"
+            f"{'y' if len(entries)==1 else 'ies'} "
+            f"({', '.join(sorted(allowed))})"
+        )
+        if not entries:
+            logging.error(
+                f"No entries match --pdb_filter={pdb_filter!r}. "
+                "Check that the PDB IDs exist in the JSON file."
+            )
+            return {}
 
     all_results = {}
     all_scores = {}
@@ -673,6 +685,10 @@ def parse_args():
                    help="Skip Mode C (generated)")
     p.add_argument("--skip_scoring", action="store_true",
                    help="Skip scoring (only compute BSA/interfaces)")
+    p.add_argument("--pdb_filter", default="",
+                   help="Comma-separated list of C_PDB IDs to process "
+                        "(e.g. '1ASY,1AV6'). If omitted, all entries in "
+                        "the JSON are processed.")
     return p.parse_args()
 
 
@@ -688,4 +704,5 @@ if __name__ == "__main__":
         skip_unbound=args.skip_unbound,
         skip_generated=args.skip_generated,
         skip_scoring=args.skip_scoring,
+        pdb_filter=args.pdb_filter,
     )
