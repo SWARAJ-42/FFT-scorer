@@ -131,61 +131,80 @@ if _GPU_AVAILABLE:
 # Partial charge dictionary
 # key: (residue_name, atom_name)  →  charge in units of e
 # Wildcard residue "*" applies to every residue not matched by a specific key.
-# Source: AMBER99SB partial charges (Wang et al. 2000, JACS)
+# Source: IPoLQ partial charges
 # ═══════════════════════════════════════════════════════════════════════════
 
-PARTIAL_CHARGES: Dict[Tuple[str, str], float] = {
-    # ── Protein — positively charged side chains ──────────────────────────
-    ("ARG", "CZ"):   +0.64,
-    ("ARG", "NH1"):  +0.46,
-    ("ARG", "NH2"):  +0.46,
-    ("ARG", "NE"):   +0.29,
-    ("ARG", "HE"):   +0.00,   # no H atoms in our PDB parser
-    ("LYS", "NZ"):   +0.69,
-    ("HIS", "ND1"):  +0.10,
-    ("HIS", "NE2"):  +0.10,
-    ("HIS", "CE1"):  +0.08,
-    # ── Protein — negatively charged side chains ──────────────────────────
-    ("ASP", "OD1"):  -0.80,
-    ("ASP", "OD2"):  -0.80,
-    ("ASP", "CG"):   +0.70,
-    ("GLU", "OE1"):  -0.80,
-    ("GLU", "OE2"):  -0.80,
-    ("GLU", "CD"):   +0.70,
-    # ── Protein — backbone (partial charges present in every residue) ─────
-    ("*",   "N"):    -0.41,
-    ("*",   "C"):    +0.60,
-    ("*",   "O"):    -0.57,
-    ("*",   "CA"):   +0.02,
-    # ── RNA — phosphate backbone (dominant negative patch) ────────────────
-    ("A",   "P"):   +1.17,  ("U",   "P"):   +1.17,
-    ("G",   "P"):   +1.17,  ("C",   "P"):   +1.17,
-    ("A",   "O1P"): -0.78,  ("U",   "O1P"): -0.78,
-    ("G",   "O1P"): -0.78,  ("C",   "O1P"): -0.78,
-    ("A",   "O2P"): -0.78,  ("U",   "O2P"): -0.78,
-    ("G",   "O2P"): -0.78,  ("C",   "O2P"): -0.78,
-    # ── RNA — ribose oxygens ──────────────────────────────────────────────
-    ("A",   "O5'"): -0.37,  ("U",   "O5'"): -0.37,
-    ("G",   "O5'"): -0.37,  ("C",   "O5'"): -0.37,
-    ("A",   "O3'"): -0.37,  ("U",   "O3'"): -0.37,
-    ("G",   "O3'"): -0.37,  ("C",   "O3'"): -0.37,
-    ("A",   "C1'"): +0.06,  ("U",   "C1'"): +0.06,
-    ("G",   "C1'"): +0.06,  ("C",   "C1'"): +0.06,
-    # ── RNA — 2'-OH (key for A-form helix recognition) ───────────────────
-    ("A",   "O2'"): -0.61,  ("U",   "O2'"): -0.61,
-    ("G",   "O2'"): -0.61,  ("C",   "O2'"): -0.61,
-    # ── RNA — adenine base (partial positive at N1, N6) ──────────────────
-    ("A",   "N1"):  -0.59,  ("A",   "N6"):  -0.91,
-    ("A",   "C6"):  +0.52,  ("A",   "N3"):  -0.69,
-    # ── RNA — guanine base (O6 negative, N1/N2 partial positive) ─────────
-    ("G",   "O6"):  -0.54,  ("G",   "N1"):  -0.47,
-    ("G",   "N2"):  -0.92,  ("G",   "N7"):  -0.57,
-    # ── RNA — uracil base (O2, O4 negative) ──────────────────────────────
-    ("U",   "O2"):  -0.55,  ("U",   "O4"):  -0.55,
-    ("U",   "N3"):  -0.35,
-    # ── RNA — cytosine base (O2 negative, N3/N4 partial) ─────────────────
-    ("C",   "O2"):  -0.58,  ("C",   "N3"):  -0.72,
-    ("C",   "N4"):  -0.95,  ("C",   "C4"):  +0.71,
+PARTIAL_CHARGES = {
+
+    # ── POSITIVE SIDE CHAINS ───────────────────────────
+    ("ARG", "CZ"):   +0.78,
+    ("ARG", "NH1"):  +0.05,
+    ("ARG", "NH2"):  +0.05,
+    ("ARG", "NE"):   -0.18,
+
+    ("LYS", "NZ"):   +0.60,
+
+    ("HIS", "ND1"):  -0.30,
+    ("HIS", "NE2"):  -0.30,
+    ("HIS", "CE1"):  +0.10,
+
+    # ── NEGATIVE SIDE CHAINS ───────────────────────────
+    ("ASP", "CG"):   +1.00,
+    ("ASP", "OD1"):  -0.90,
+    ("ASP", "OD2"):  -0.90,
+
+    ("GLU", "CD"):   +0.80,
+    ("GLU", "OE1"):  -0.86,
+    ("GLU", "OE2"):  -0.86,
+
+    # ── POLAR / NEUTRAL SIDE CHAINS ────────────────────
+    ("SER", "OG"):   -0.22,
+    ("THR", "OG1"):  -0.28,
+    ("TYR", "OH"):   -0.17,
+
+    ("ASN", "OD1"):  -0.67,
+    ("ASN", "ND2"):  -0.20,
+
+    ("GLN", "OE1"):  -0.64,
+    ("GLN", "NE2"):  -0.25,
+
+    ("CYS", "SG"):   -0.13,
+
+    ("MET", "SD"):   -0.25,
+
+    ("TRP", "NE1"):  -0.04,
+
+    # ── HYDROPHOBIC (weak polarization retained) ───────
+    ("ILE", "CG1"):  +0.16,
+    ("LEU", "CG"):   +0.68,
+    ("VAL", "CG1"):  +0.39,
+
+    ("PHE", "CZ"):   -0.19,
+
+    # ── BACKBONE (from backbone.prepi) ─────────────────
+    ("*", "N"):  -0.45,
+    ("*", "C"):  +0.60,
+    ("*", "O"):  -0.60,
+    ("*", "CA"): +0.05,
+
+    # ── RNA (unchanged — already reasonable) ───────────
+    ("A", "P"):   +1.00, ("U", "P"):   +1.00,
+    ("G", "P"):   +1.00, ("C", "P"):   +1.00,
+
+    ("A", "O1P"): -0.75, ("U", "O1P"): -0.75,
+    ("G", "O1P"): -0.75, ("C", "O1P"): -0.75,
+
+    ("A", "O2P"): -0.75, ("U", "O2P"): -0.75,
+    ("G", "O2P"): -0.75, ("C", "O2P"): -0.75,
+
+    ("A", "O5'"): -0.35, ("U", "O5'"): -0.35,
+    ("G", "O5'"): -0.35, ("C", "O5'"): -0.35,
+
+    ("A", "O3'"): -0.35, ("U", "O3'"): -0.35,
+    ("G", "O3'"): -0.35, ("C", "O3'"): -0.35,
+
+    ("A", "O2'"): -0.45, ("U", "O2'"): -0.45,
+    ("G", "O2'"): -0.45, ("C", "O2'"): -0.45,
 }
 
 # Physical constants
@@ -196,17 +215,35 @@ DIEL_SLOPE = 0.24    # ε(r) ≈ DIEL_SLOPE × r  (Mehler & Solmajer)
 
 def get_partial_charge(atom: Atom) -> float:
     """
-    Return the partial charge (in e) for a given atom.
-    Look-up priority:
-        1. Exact (res_name, atom_name) match
-        2. Wildcard ("*", atom_name)  — backbone atoms
-        3. 0.0 if no match
+    Improved lookup:
+    - Handles HIS variants (HID/HIE/HIP)
+    - Handles RNA vs protein cleanly
     """
-    q = PARTIAL_CHARGES.get((atom.res_name, atom.name))
+
+    res = atom.res_name.upper()
+    name = atom.name.upper()
+
+    # --- Normalize residue names ---
+    if res in ("HID", "HIE", "HIP"):
+        res = "HIS"
+    elif res in ("ASH",):
+        res = "ASP"
+    elif res in ("GLH",):
+        res = "GLU"
+    elif res in ("CYX",):
+        res = "CYS"
+
+    # --- Direct lookup ---
+    q = PARTIAL_CHARGES.get((res, name))
     if q is not None:
         return q
-    q = PARTIAL_CHARGES.get(("*", atom.name))
-    return q if q is not None else 0.0
+
+    # --- Backbone fallback ---
+    q = PARTIAL_CHARGES.get(("*", name))
+    if q is not None:
+        return q
+
+    return 0.0
 
 
 # ═══════════════════════════════════════════════════════════════════════════

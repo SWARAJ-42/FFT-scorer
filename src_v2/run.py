@@ -224,11 +224,33 @@ def run_pipeline(args: argparse.Namespace) -> None:
     viz: Set[str] = set(args.viz) if args.viz is not None else set()
 
     # ── Phase 1: load & filter cases ────────────────────────────────────
-    cases = _load_and_filter_cases(
-        json_path  = args.json,
-        pdb_root   = args.pdb_root,
-        requested  = args.complex,
-    )
+    _banner("Phase 1 — Loading & parsing PDB structures")
+    print(f"  JSON     : {args.json}")
+    print(f"  PDB root : {args.pdb_root}\n")
+    all_cases, skipped = load_cases(args.json, args.pdb_root)
+    print_summary(all_cases, skipped)
+
+    # Filter to the user-requested subset for actual docking
+    case_map = {c.complex_id.upper(): c for c in all_cases}
+    if not args.complex:          # --all
+        cases = all_cases
+    else:
+        cases = []
+        for raw_id in args.complex:
+            uid = raw_id.strip().upper()
+            if uid in case_map:
+                cases.append(case_map[uid])
+            else:
+                print(f"  [WARNING] Complex '{raw_id}' not found — skipping.")
+    if not cases:
+        print("[ERROR] None of the requested complex IDs could be matched.")
+        sys.exit(1)
+    for case in cases:
+        for w in validate_case(case): print(f"  ⚠  {w}")
+    mode = "ALL" if not args.complex else f"{len(cases)} specific complex(es)"
+    print(f"\n  → Running pipeline on {mode}: {[c.complex_id for c in cases]}\n")
+
+    # ── Propensity table: always fit on ALL 170 cases, never just the subset ──
     prop_table = None
     if args.propensity:
         prop_table = PropensityTable()
@@ -236,7 +258,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             prop_table.load(args.propensity_table)
         else:
             _banner("Building interface propensity table from bound complexes")
-            prop_table.fit(cases)        # uses case.complex_struct for all cases
+            prop_table.fit(all_cases)    # ← FIXED: use all_cases, not cases
             if args.propensity_table:
                 prop_table.save(args.propensity_table)
         prop_table.print_table()
