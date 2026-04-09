@@ -6,10 +6,11 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "freesasa>=2.2.1",
+    "matplotlib>=3.10.8",
     "nbformat>=5.10.4",
     "plotly>=6.6.0",
+    "pydantic>=2.12.5",
     "scipy>=1.17.1",
     "torch",
     "torchvision",
-    "cupy"
 ]

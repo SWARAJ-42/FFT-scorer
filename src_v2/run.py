@@ -74,7 +74,7 @@ from phase4 import FFTDocker, DockingResult
 from phase5 import run_phase5, BenchmarkResult
 from utils.multires   import MultiResDocker
 from utils.propensity import PropensityTable
-
+from utils.score_v_irmsd_graph import generate_score_vs_irmsd_plot
 
 # ══════════════════════════════════════════════════════════════════════════
 # Defaults — point directly at your BTP data folder
@@ -344,6 +344,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
     _banner(f"Pipeline complete in {elapsed:.1f} s  |  "
             f"{len(cases)} complex(es) processed  |  "
             f"Output → {args.output}/")
+    
+    generate_score_vs_irmsd_plot(all_benchmarks, output_dir=".")
 
 
 # ══════════════════════════════════════════════════════════════════════════
