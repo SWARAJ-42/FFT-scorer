@@ -290,6 +290,163 @@ def detect_interface_by_distance(residues: List[Dict],
 
 
 # ---------------------------------------------------------------------------
+# Coordinate-Frame Alignment
+# ---------------------------------------------------------------------------
+
+def _get_all_backbone_coords(residues: List[Dict]) -> np.ndarray:
+    """Collect all backbone atom coordinates from a residue list (N, CA, C, O)."""
+    pts = []
+    for r in residues:
+        for atom in sorted(BACKBONE_ATOMS):
+            c = r["atoms"].get(atom)
+            if c is not None:
+                pts.append(c)
+    return np.array(pts) if pts else np.empty((0, 3))
+
+
+def _kabsch_rotation(P: np.ndarray, Q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Return (R, t) such that  P_aligned = P @ R.T + t  minimises RMSD to Q.
+
+    P and Q must have the same shape (N, 3).  Uses the Kabsch / SVD algorithm.
+    """
+    P_mean = P.mean(axis=0)
+    Q_mean = Q.mean(axis=0)
+    P_c = P - P_mean
+    Q_c = Q - Q_mean
+
+    H = P_c.T @ Q_c
+    U, S, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    D = np.diag([1.0, 1.0, d])
+    R = Vt.T @ D @ U.T
+
+    t = Q_mean - P_mean @ R.T
+    return R, t
+
+
+def _apply_transform(residues: List[Dict], R: np.ndarray, t: np.ndarray) -> List[Dict]:
+    """
+    Return a deep-copied residue list with all coordinates rotated and translated.
+
+    Applied as:  coord_new = coord @ R.T + t
+    """
+    import copy
+    aligned = []
+    for r in residues:
+        nr = copy.deepcopy(r)
+        nr["atoms"] = {name: coord @ R.T + t for name, coord in r["atoms"].items()}
+        if r["rep_atom"] is not None:
+            nr["rep_atom"] = r["rep_atom"] @ R.T + t
+        nr["backbone"] = [c @ R.T + t for c in r["backbone"]]
+        aligned.append(nr)
+    return aligned
+
+
+def align_generated_to_truth(truth_residues: List[Dict],
+                              gen_residues: List[Dict]) -> List[Dict]:
+    """
+    Superimpose the generated structure onto the ground truth using all
+    backbone atoms (N, CA, C, O).  Returns the aligned generated residues.
+
+    When the truth and generated structures share the same number of backbone
+    atoms they are matched index-by-index (safe for FFT outputs that preserve
+    residue count).  If counts differ, the first min(N_t, N_g) atoms are used.
+
+    This resolves the "physical disconnect" / coordinate-frame mismatch that
+    causes f_nat=0 and I-RMSD=inf when FFT output lives in a different frame
+    from the ground truth.
+    """
+    t_bb = _get_all_backbone_coords(truth_residues)
+    g_bb = _get_all_backbone_coords(gen_residues)
+
+    if len(t_bb) == 0 or len(g_bb) == 0:
+        logging.warning("align_generated_to_truth: no backbone atoms — skipping alignment")
+        return gen_residues
+
+    n = min(len(t_bb), len(g_bb))
+    if n < 3:
+        logging.warning(f"align_generated_to_truth: only {n} matched backbone atoms — skipping")
+        return gen_residues
+
+    if len(t_bb) != len(g_bb):
+        logging.warning(
+            f"align_generated_to_truth: backbone atom count mismatch "
+            f"(truth={len(t_bb)}, gen={len(g_bb)}) — using first {n}"
+        )
+
+    R, t_vec = _kabsch_rotation(g_bb[:n], t_bb[:n])
+    aligned = _apply_transform(gen_residues, R, t_vec)
+
+    # Verify improvement
+    g_bb_aligned = _get_all_backbone_coords(aligned)
+    pre_rmsd  = float(np.sqrt(np.mean(np.sum((g_bb[:n] - t_bb[:n]) ** 2, axis=1))))
+    post_rmsd = float(np.sqrt(np.mean(np.sum((g_bb_aligned[:n] - t_bb[:n]) ** 2, axis=1))))
+    logging.info(
+        f"align_generated_to_truth: backbone RMSD  before={pre_rmsd:.2f} Å  "
+        f"after={post_rmsd:.2f} Å  (n={n} atoms)"
+    )
+
+    return aligned
+
+
+# ---------------------------------------------------------------------------
+# Chain-agnostic residue matching helper
+# ---------------------------------------------------------------------------
+
+def _match_residues_by_index(
+        truth_residues: List[Dict],
+        gen_residues: List[Dict],
+        truth_ids: Set[Tuple[str, int]],
+        gen_ids: Set[Tuple[str, int]],
+) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Match interface residues between truth and generated structures.
+
+    Primary strategy: exact (chain, resnum) match.
+    Fallback: positional index match when chain IDs differ (common for FFT
+    outputs that use generic chain labels like 'A'/'B' regardless of the
+    original chain name).
+
+    Returns (truth_int_residues, gen_int_residues) — paired lists of the
+    same length.
+    """
+    # Filter to interface
+    t_int = [r for r in truth_residues if (r["chain"], r["resnum"]) in truth_ids] \
+            if truth_ids else truth_residues
+    g_int = [r for r in gen_residues if (r["chain"], r["resnum"]) in gen_ids] \
+            if gen_ids else gen_residues
+
+    # Check exact overlap
+    t_keys = {(r["chain"], r["resnum"]) for r in t_int}
+    g_keys = {(r["chain"], r["resnum"]) for r in g_int}
+    common = t_keys & g_keys
+
+    if common:
+        # Use exact matches only
+        t_matched = [r for r in t_int if (r["chain"], r["resnum"]) in common]
+        g_matched = [r for r in g_int if (r["chain"], r["resnum"]) in common]
+        return t_matched, g_matched
+
+    # Fallback: match by molecular type (protein/RNA) and sequence index
+    logging.warning(
+        "match_residues: no (chain, resnum) overlap between truth and generated — "
+        "falling back to index-based matching by molecule type"
+    )
+    t_pro = [r for r in t_int if not r["is_rna"]]
+    t_rna = [r for r in t_int if r["is_rna"]]
+    g_pro = [r for r in g_int if not r["is_rna"]]
+    g_rna = [r for r in g_int if r["is_rna"]]
+
+    n_pro = min(len(t_pro), len(g_pro))
+    n_rna = min(len(t_rna), len(g_rna))
+
+    t_matched = t_pro[:n_pro] + t_rna[:n_rna]
+    g_matched = g_pro[:n_pro] + g_rna[:n_rna]
+    return t_matched, g_matched
+
+
+# ---------------------------------------------------------------------------
 # Metric 1: Fraction of Native Contacts (f_nat)
 # ---------------------------------------------------------------------------
 
@@ -318,18 +475,25 @@ def calculate_f_nat(truth_residues: List[Dict],
     -------
     float in [0.0, 1.0]. Higher is better.
     """
-    def _filter(residues, ids):
-        if ids:
-            return [r for r in residues if (r["chain"], r["resnum"]) in ids]
-        return residues  # no filter → use all
-
     def _split(residues):
         pro = [r for r in residues if not r["is_rna"] and r["rep_atom"] is not None]
         rna = [r for r in residues if r["is_rna"]     and r["rep_atom"] is not None]
         return pro, rna
 
-    t_int  = _filter(truth_residues, truth_int_ids)
-    g_int  = _filter(gen_residues,   gen_int_ids)
+    # Use all residues when interface IDs unavailable (graceful fallback)
+    t_int = [r for r in truth_residues if (r["chain"], r["resnum"]) in truth_int_ids] \
+            if truth_int_ids else truth_residues
+    g_int = [r for r in gen_residues if (r["chain"], r["resnum"]) in gen_int_ids] \
+            if gen_int_ids else gen_residues
+
+    # If no chain overlap, fall back to full residue list for contact detection
+    t_keys = {(r["chain"], r["resnum"]) for r in t_int}
+    g_keys = {(r["chain"], r["resnum"]) for r in g_int}
+    if not (t_keys & g_keys) and truth_int_ids and gen_int_ids:
+        logging.warning("f_nat: no (chain,resnum) overlap in interface — using all residues")
+        t_int = truth_residues
+        g_int = gen_residues
+
     t_pro, t_rna = _split(t_int)
     g_pro, g_rna = _split(g_int)
 
@@ -368,11 +532,49 @@ def calculate_f_nat(truth_residues: List[Dict],
     g_r_coords = np.array([r["rep_atom"] for r in g_rna])
     g_dists    = cdist(g_p_coords, g_r_coords)
 
+    # Build generated contact set using positional indices so it can be
+    # compared with the native set regardless of chain-ID differences.
+    # We map each generated residue to the closest truth residue by index.
+    t_pro_idx = {i: r for i, r in enumerate(
+        [r for r in truth_residues if not r["is_rna"]]
+    )}
+    t_rna_idx = {i: r for i, r in enumerate(
+        [r for r in truth_residues if r["is_rna"]]
+    )}
+
+    def _truth_key_for_gen(gen_res, truth_list_by_index):
+        """Return the (chain, resnum) of the truth residue at the same index."""
+        # Try exact match first
+        for tr in truth_list_by_index.values():
+            if tr["chain"] == gen_res["chain"] and tr["resnum"] == gen_res["resnum"]:
+                return (tr["chain"], tr["resnum"])
+        # Fall back to positional index from g_pro / g_rna list
+        return None
+
+    # Map generated protein residues → truth protein residues by position
+    gen_pro_list = [r for r in gen_residues if not r["is_rna"] and r["rep_atom"] is not None]
+    gen_rna_list = [r for r in gen_residues if r["is_rna"]     and r["rep_atom"] is not None]
+    truth_pro_list = [r for r in truth_residues if not r["is_rna"]]
+    truth_rna_list = [r for r in truth_residues if r["is_rna"]]
+
+    def _map_key(gen_r, gen_list, truth_list):
+        """Map gen residue → truth (chain, resnum) by position in the list."""
+        try:
+            idx = next(i for i, r in enumerate(gen_list)
+                       if r["chain"] == gen_r["chain"] and r["resnum"] == gen_r["resnum"])
+        except StopIteration:
+            return (gen_r["chain"], gen_r["resnum"])
+        if idx < len(truth_list):
+            return (truth_list[idx]["chain"], truth_list[idx]["resnum"])
+        return (gen_r["chain"], gen_r["resnum"])
+
     generated: Set[Tuple] = set()
     for pi, pr in enumerate(g_pro):
         for ri, rr in enumerate(g_rna):
             if g_dists[pi, ri] < RESIDUE_CONTACT_DISTANCE:
-                generated.add((pr["chain"], pr["resnum"], rr["chain"], rr["resnum"]))
+                pk = _map_key(pr, gen_pro_list, truth_pro_list)
+                rk = _map_key(rr, gen_rna_list, truth_rna_list)
+                generated.add((pk[0], pk[1], rk[0], rk[1]))
 
     recovered = len(native & generated)
     f_nat = recovered / n_native
@@ -440,9 +642,9 @@ def calculate_irmsd(truth_residues: List[Dict],
     -------
     float — I-RMSD in Å. Lower is better. Returns inf if < 3 matched atoms.
     """
+    # --- Attempt exact (chain, resnum, atom) matching first ---
     combined_ids = truth_int_ids | gen_int_ids
     if not combined_ids:
-        # Last-resort fallback: use all residues
         combined_ids = {(r["chain"], r["resnum"]) for r in truth_residues}
 
     def _index(residues):
@@ -467,9 +669,29 @@ def calculate_irmsd(truth_residues: List[Dict],
                 gen_bb.append(gc)
 
     if len(truth_bb) < 3:
+        # --- Fallback: index-based backbone matching by molecule type ---
         logging.warning(
-            f"I-RMSD: only {len(truth_bb)} matched backbone atoms — "
-            "returning inf. Likely chain-ID mismatch between truth and generated PDBs."
+            f"I-RMSD: only {len(truth_bb)} exact backbone matches — "
+            "trying index-based fallback (chain-ID mismatch likely)"
+        )
+        t_matched, g_matched = _match_residues_by_index(
+            truth_residues, gen_residues, truth_int_ids, gen_int_ids
+        )
+
+        truth_bb = []
+        gen_bb   = []
+        for t_res, g_res in zip(t_matched, g_matched):
+            for atom in sorted(BACKBONE_ATOMS):
+                tc = t_res["atoms"].get(atom)
+                gc = g_res["atoms"].get(atom)
+                if tc is not None and gc is not None:
+                    truth_bb.append(tc)
+                    gen_bb.append(gc)
+
+    if len(truth_bb) < 3:
+        logging.warning(
+            f"I-RMSD: only {len(truth_bb)} matched backbone atoms after fallback — "
+            "returning inf."
         )
         return float("inf")
 
@@ -691,6 +913,20 @@ def score_single_rank(complex_id: str,
             raise ValueError(f"No ATOM records parsed from truth_pdb={truth_pdb!r}")
         if not gen_residues:
             raise ValueError(f"No ATOM records parsed from gen_pdb={gen_pdb!r}")
+
+        # ── 1b. Superimpose generated structure onto ground truth ─────────────
+        # This resolves the "physical disconnect" / coordinate-frame mismatch:
+        # FFT docking outputs live in their own translation/rotation frame.
+        # We align gen_residues (and protein/RNA separately) to the truth frame
+        # before computing any distance-dependent metric.
+        gen_residues     = align_generated_to_truth(truth_residues, gen_residues)
+        protein_residues = align_generated_to_truth(
+            [r for r in truth_residues if not r["is_rna"]], protein_residues
+        ) if protein_residues else protein_residues
+        rna_residues_sep = align_generated_to_truth(
+            [r for r in truth_residues if r["is_rna"]], rna_residues_sep
+        ) if rna_residues_sep else rna_residues_sep
+        diag["alignment_applied"] = True
 
         # ── 2. Parse interface files ─────────────────────────────────────────
         truth_int_ids = get_interface_residue_ids(truth_int_file)

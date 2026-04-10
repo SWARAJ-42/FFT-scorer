@@ -410,16 +410,24 @@ def score_generated_poses(complex_id: str,
 
     truth_combined_int = truth_result.get("combined_int", "") or ""
 
-    # Resolve ground truth PDB: try result dict first, then canonical path
+    # Resolve ground truth PDB: try result dict first, then several canonical paths
     truth_pdb = truth_result.get("combined_pdb") or truth_result.get("pdb_file") or ""
     if not truth_pdb or not os.path.exists(truth_pdb):
-        candidate = os.path.join(truth_dir, complex_id, f"{complex_id}.pdb")
-        if os.path.exists(candidate):
-            truth_pdb = candidate
+        # Try common filename patterns inside ALL_PDBs/<complex_id>/
+        candidates = [
+            os.path.join(truth_dir, complex_id, f"{complex_id}.pdb"),
+            os.path.join(truth_dir, complex_id, f"{complex_id}_complex.pdb"),
+            os.path.join(truth_dir, complex_id, "complex.pdb"),
+        ]
+        for cand in candidates:
+            if os.path.exists(cand):
+                truth_pdb = cand
+                logging.info(f"[scoring] {complex_id}  resolved truth PDB → {cand!r}")
+                break
         else:
             logging.warning(
                 f"[scoring] {complex_id}  cannot resolve truth PDB "
-                f"(tried result dict and {candidate!r}) — scoring will use "
+                f"(tried result dict and {candidates}) — scoring will use "
                 "distance-based fallback for interface detection"
             )
             truth_pdb = ""   # score_single_rank will handle missing file
