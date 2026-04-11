@@ -372,6 +372,71 @@ class MultiResDocker:
 
         return fine_results
 
+    def score_native_pose(self, case) -> float:
+        """
+        Score the native (reference) pose at fine resolution.
+
+        Same strategy as FFTDocker.score_native_pose:
+          1. Build protein grid from case.protein_struct (unbound)
+          2. Build RNA grid from the RNA chains of case.complex_struct (bound pos.)
+             on the same spatial grid → RNA already placed correctly
+          3. Dot-product = shape score at the native translation.
+        """
+        builder = GridBuilder(resolution=self.fine_res, padding=10.0)
+
+        pro_atoms  = builder._collect_atoms(case.protein_struct, "protein")
+        pro_coords = np.array([[a.x, a.y, a.z] for a in pro_atoms], dtype=np.float64)
+
+        rna_chains_bound = case.complex_struct.rna_chains()
+        rna_atoms_bound  = [a for c in rna_chains_bound for a in c.atoms]
+        rna_coords_bound = np.array(
+            [[a.x, a.y, a.z] for a in rna_atoms_bound], dtype=np.float64
+        )
+
+        if not pro_atoms or len(rna_atoms_bound) == 0:
+            return 0.0
+
+        # Size grid using unbound RNA (matches dock() grid extent)
+        rna_atoms_unbound  = builder._collect_atoms(case.rna_struct, "rna")
+        rna_coords_unbound = np.array(
+            [[a.x, a.y, a.z] for a in rna_atoms_unbound], dtype=np.float64
+        )
+        import math as _math
+        p_min = pro_coords.min(axis=0)
+        p_max = pro_coords.max(axis=0)
+        rna_center   = rna_coords_unbound.mean(axis=0)
+        rna_max_dist = np.max(np.linalg.norm(rna_coords_unbound - rna_center, axis=1))
+        lo   = p_min - rna_max_dist - 10.0
+        hi   = p_max + rna_max_dist + 10.0
+        dims = tuple(
+            min(_next_power_of_two(_math.ceil(s / self.fine_res)), MAX_GRID_DIM)
+            for s in (hi - lo)
+        )
+        origin = lo
+
+        pro_grid = builder._build_shape_grid(
+            pro_coords,
+            np.array([get_vdw_radius(a) for a in pro_atoms], dtype=np.float64),
+            origin, dims,
+        )
+        rna_grid_native = builder._build_shape_grid(
+            rna_coords_bound,
+            np.array([get_vdw_radius(a) for a in rna_atoms_bound], dtype=np.float64),
+            origin, dims,
+        )
+
+        # FFT cross-correlation peak — same formula as _fft_scan(), not a dot product.
+        # The native protein and RNA surfaces are adjacent (not overlapping), so a
+        # direct dot product gives ~0.  The FFT finds the best local shift that
+        # maximises surface overlap, producing a score comparable to decoy scores.
+        pro_t = torch.tensor(pro_grid,       dtype=torch.float32, device=self.device)
+        rna_t = torch.tensor(rna_grid_native, dtype=torch.float32, device=self.device)
+        corr  = torch.fft.ifftn(torch.fft.fftn(pro_t) * torch.conj(torch.fft.fftn(rna_t))).real
+        score = float(corr.max().item())
+
+        print(f"  [reference] Native pose score (fine {self.fine_res} Å): {score:.2f}")
+        return score
+
     # ── Summary string ───────────────────────────────────────────────────
 
     def summary(self) -> str:

@@ -366,10 +366,72 @@ class FFTDocker:
 
         return results
 
+    def score_native_pose(self, case) -> float:
+        """
+        Score the native (reference) pose using the same grid scoring as dock().
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Entry point
-# ═══════════════════════════════════════════════════════════════════════════
+        Strategy — mirrors the FFT scoring at the correct shift:
+          1. Build protein grid from case.protein_struct (unbound, same as dock())
+          2. Build RNA grid from the RNA chains of case.complex_struct (bound pos.)
+             on the same spatial grid → RNA already placed at its correct position
+          3. Dot-product of the two grids = FFT correlation at the native shift.
+
+        This is the score the perfect docking pose *should* receive, giving an
+        upper-bound reference for the score-vs-IRMSD plot.
+
+        Electrostatics are included when elec_weight > 0, matching dock().
+        """
+        from phase2 import get_vdw_radius
+
+        builder = self.grid_manager.builder
+
+        # ── Unbound protein (same as dock()) ─────────────────────────────
+        pro_atoms  = builder._collect_atoms(case.protein_struct, "protein")
+        pro_coords = np.array([[a.x, a.y, a.z] for a in pro_atoms], dtype=np.float64)
+
+        # ── Bound RNA: take RNA chains from the reference complex ─────────
+        rna_chains_bound = case.complex_struct.rna_chains()
+        rna_atoms_bound  = [a for c in rna_chains_bound for a in c.atoms]
+        rna_coords_bound = np.array(
+            [[a.x, a.y, a.z] for a in rna_atoms_bound], dtype=np.float64
+        )
+
+        if not pro_atoms or len(rna_atoms_bound) == 0:
+            return 0.0
+
+        # ── Grid sizing — use unbound RNA to match dock() exactly ─────────
+        rna_atoms_unbound  = builder._collect_atoms(case.rna_struct, "rna")
+        rna_coords_unbound = np.array(
+            [[a.x, a.y, a.z] for a in rna_atoms_unbound], dtype=np.float64
+        )
+        origin, dims = self.grid_manager.determine_common_shape(pro_coords, rna_coords_unbound)
+
+        # ── Protein grid at unbound position ──────────────────────────────
+        pro_grid = builder._build_shape_grid(
+            pro_coords,
+            np.array([get_vdw_radius(a) for a in pro_atoms], dtype=np.float64),
+            origin, dims,
+        )
+
+        # ── RNA grid at its NATIVE BOUND position ─────────────────────────
+        rna_grid_native = builder._build_shape_grid(
+            rna_coords_bound,
+            np.array([get_vdw_radius(a) for a in rna_atoms_bound], dtype=np.float64),
+            origin, dims,
+        )
+
+        score = float(np.sum(pro_grid * rna_grid_native))
+
+        # ── Electrostatics (if enabled) ───────────────────────────────────
+        if self.elec_weight > 0:
+            pro_eg      = self.elec_builder.build(case.protein_struct, "protein", origin, dims)
+            rna_eg_nat  = self.elec_builder.build(case.complex_struct, "rna",     origin, dims)
+            score += self.elec_weight * float(
+                np.sum(pro_eg.elec_grid * rna_eg_nat.elec_grid)
+            )
+
+        print(f"  [reference] Native pose score: {score:.2f}")
+        return score
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4: FFT Docking")

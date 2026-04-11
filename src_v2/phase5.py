@@ -667,7 +667,8 @@ def run_phase5(
         print(f"  {'Rank':<6} {'Score':>10} {'L-RMSD (Å)':>12} {'I-RMSD (Å)':>12}  Output")
         print(f"  {'----':<6} {'-----':>10} {'----------':>12} {'----------':>12}  ------")
 
-    for rank, result in enumerate(docking_results[:top_n], start=1):
+    for i, result in enumerate(docking_results[:top_n]):
+        rank = i   # now starts from 0
 
         # ── Apply transform to RNA ────────────────────────────────────
         rna_chains = case.rna_struct.rna_chains()

@@ -27,7 +27,7 @@ Tune the two constants below for your hardware.
 #   RTX 3090 24 GB  →  use 128
 #   L40S     48 GB  →  use 256
 #
-ROTATION_BATCH_SIZE: int = 256
+ROTATION_BATCH_SIZE: int = 32
 
 # Maximum grid dimension along any axis (powers of 2 only).
 # Larger = more accurate but more VRAM and slower FFT.
@@ -35,7 +35,7 @@ ROTATION_BATCH_SIZE: int = 256
 #   RTX 3050  →  128
 #   L40S      →  256
 #
-MAX_GRID_DIM: int = 256
+MAX_GRID_DIM: int = 128
 
 # ──────────────────────────────────────────────────────────────────────────
 

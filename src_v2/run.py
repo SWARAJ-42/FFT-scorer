@@ -291,6 +291,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # ── Phases 4 + 5: process each complex in sequence ──────────────────
     all_results:    Dict[str, List[DockingResult]] = {}
     all_benchmarks: List[BenchmarkResult]          = []
+    ref_benchmarks: List[BenchmarkResult]          = []
 
     for idx, case in enumerate(cases, start=1):
         _banner(
@@ -315,6 +316,17 @@ def run_pipeline(args: argparse.Namespace) -> None:
         docking_results = docker.dock(case)
         all_results[case.complex_id] = docking_results
 
+        # Score the bound reference complex — IRMSD = 0 by definition
+        ref_score = docker.score_native_pose(case)
+        ref_benchmarks.append(BenchmarkResult(
+            complex_id = case.complex_id,
+            rank       = 0,
+            score      = ref_score,
+            lrmsd      = 0.0,
+            irmsd      = 0.0,
+            pdb_dir    = case.complex_pdb,
+        ))
+
         # Phase 5: export docked PDB files + RMSD benchmarking
         benchmarks = run_phase5(
             case             = case,
@@ -335,6 +347,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
     _banner("Global Benchmark Summary")
     print(f"  {'Complex':<12} {'Rank':<6} {'Score':>10} {'L-RMSD (Å)':>12} {'I-RMSD (Å)':>12}")
     print(f"  {'-------':<12} {'----':<6} {'-----':>10} {'----------':>12} {'----------':>12}")
+    for b in ref_benchmarks:
+        print(f"  {b.complex_id:<12} {'ref':<6} {b.score:>10.2f} {'0.00':>12} {'0.00':>12}")
     for b in all_benchmarks:
         lr = f"{b.lrmsd:.2f}" if b.lrmsd is not None else "  N/A"
         ir = f"{b.irmsd:.2f}" if b.irmsd is not None else "  N/A"
@@ -345,7 +359,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
             f"{len(cases)} complex(es) processed  |  "
             f"Output → {args.output}/")
     
-    generate_score_vs_irmsd_plot(all_benchmarks, output_dir=".")
+    generate_score_vs_irmsd_plot(all_benchmarks, output_dir=".", reference_benchmarks=ref_benchmarks)
 
 
 # ══════════════════════════════════════════════════════════════════════════
