@@ -209,8 +209,8 @@ def load_cases(json_path: str, pdb_root: str):
     for rec in records:
         docking_case = rec.get("Docking_case", "").strip().upper()
 
-        if docking_case == "UU":
-            continue
+        # if docking_case == "UU":
+        #     continue
 
         complex_id = clean_pdb_id(rec.get("C_PDB", ""))
         pro_id = clean_pdb_id(rec.get("U_pro_PDB", ""))

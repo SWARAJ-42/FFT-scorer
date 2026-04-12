@@ -1,0 +1,16 @@
+Score vs IRMSD Plot
+====================
+
+Description:
+This plot shows the relationship between docking score and IRMSD.
+Each point represents a docked pose (decoy).
+
+Interpretation:
+- Lower IRMSD = closer to native structure (better).
+- Higher score = better docking prediction.
+- Ideal trend: high score at low IRMSD.
+
+Total decoy points plotted: 100
+
+Reference (bound) complexes: 1
+  3ZC0: score=1.00  IRMSD=0.00 (by definition)
